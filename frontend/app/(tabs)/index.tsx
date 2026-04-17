@@ -103,10 +103,15 @@ export default function Home() {
         <View style={styles.section}>
           <Eyebrow>FIELD NOTE</Eyebrow>
           <Card style={{ marginTop: space.sm }}>
-            <Text style={[type.bodyLg, { color: colors.light.ink, fontFamily: fonts.serifMed }]}>
-              {pickFromSeed(FIELD_NOTES, new Date().toDateString() + (user?.id || ''))}
-            </Text>
-            <Text style={[type.meta, { color: colors.light.inkMuted, marginTop: space.md }]}>— RIDER'S ALMANAC</Text>
+            {(() => {
+              const note = pickFromSeed(FIELD_NOTES, new Date().toDateString() + (user?.id || ''));
+              return <>
+                <Text style={[type.bodyLg, { color: colors.light.ink, fontFamily: fonts.serifMed }]}>
+                  {note.text}
+                </Text>
+                <Text style={[type.meta, { color: colors.light.inkMuted, marginTop: space.md }]}>{note.by}</Text>
+              </>;
+            })()}
           </Card>
         </View>
       </ScrollView>

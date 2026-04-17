@@ -1,15 +1,25 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import { useAuth } from '../../src/contexts/AuthContext';
+import { api } from '../../src/lib/api';
 import { colors, type, space } from '../../src/theme/tokens';
 import { Eyebrow, Rule, SpecRow, Card, Meta, Button } from '../../src/components/ui';
 
 export default function Profile() {
   const { user, signOut } = useAuth();
   const router = useRouter();
+  const [badges, setBadges] = useState<any[]>([]);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      (async () => {
+        try { const { data } = await api.get('/users/me/achievements'); setBadges(data.badges || []); } catch {}
+      })();
+    }, [])
+  );
 
   if (!user) return null;
 
@@ -47,6 +57,27 @@ export default function Profile() {
           </View>
         </View>
         <Rule />
+
+        <View style={styles.section}>
+          <Eyebrow>ACHIEVEMENTS — {badges.length}</Eyebrow>
+          {badges.length === 0 ? (
+            <Card style={{ marginTop: space.sm }}>
+              <Text style={[type.body, { color: colors.light.inkMuted }]}>None yet. Complete a ride to earn your first badge.</Text>
+            </Card>
+          ) : (
+            <View style={{ marginTop: space.sm, gap: space.sm }}>
+              {badges.map((b) => (
+                <View key={b.code} style={styles.badgeRow} testID={`badge-${b.code}`}>
+                  <View style={styles.badgeDot}><Feather name="award" size={14} color={colors.light.amber} /></View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[type.body, { color: colors.light.ink, fontFamily: 'Fraunces_500Medium' }]}>{b.title}</Text>
+                    <Meta style={{ marginTop: 2 }}>{b.meta.toUpperCase()}</Meta>
+                  </View>
+                </View>
+              ))}
+            </View>
+          )}
+        </View>
 
         <View style={styles.section}>
           <Eyebrow>THE BIKE</Eyebrow>
@@ -94,4 +125,6 @@ const styles = StyleSheet.create({
   section: { paddingHorizontal: space.lg, marginTop: space.xl },
   contactRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: space.md },
   contactRowDivider: { borderBottomWidth: 1, borderBottomColor: colors.light.rule },
+  badgeRow: { flexDirection: 'row', alignItems: 'center', padding: space.md, borderWidth: 1, borderColor: colors.light.rule, backgroundColor: colors.light.surface, gap: 12 },
+  badgeDot: { width: 32, height: 32, borderRadius: 16, borderWidth: 1, borderColor: colors.light.amber, alignItems: 'center', justifyContent: 'center' },
 });

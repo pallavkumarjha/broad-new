@@ -13,7 +13,7 @@ from typing import List, Optional, Literal
 import bcrypt
 import jwt as pyjwt
 import httpx
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, WebSocket, WebSocketDisconnect
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr
@@ -290,7 +290,7 @@ async def list_trips(
     status: Optional[str] = None,
     user: dict = Depends(get_current_user),
 ):
-    query = {"user_id": user["id"]}
+    query = {"$or": [{"user_id": user["id"]}, {"crew_members": user["id"]}]}
     if status:
         query["status"] = status
     cursor = db.trips.find(query, {"_id": 0}).sort("created_at", -1)
@@ -442,6 +442,51 @@ async def users_search(q: str, user: dict = Depends(get_current_user)):
     return {"results": results}
 
 
+@api.get("/users/me/achievements")
+async def my_achievements(user: dict = Depends(get_current_user)):
+    """Derive badges from completed trips + stats."""
+    cursor = db.trips.find(
+        {"$or": [{"user_id": user["id"]}, {"crew_members": user["id"]}], "status": "completed"},
+        {"_id": 0},
+    )
+    trips = await cursor.to_list(500)
+    total_km = sum((t.get("actual_distance_km") or t.get("distance_km") or 0) for t in trips)
+    count = len(trips)
+    max_elev = max((t.get("elevation_m") or 0) for t in trips) if trips else 0
+    longest = max((t.get("actual_distance_km") or t.get("distance_km") or 0) for t in trips) if trips else 0
+    fastest = max((t.get("top_speed_kmh") or 0) for t in trips) if trips else 0
+
+    badges = []
+    if count >= 1:
+        badges.append({"code": "first_ride", "title": "First Ride", "meta": "The road remembers the first one."})
+    if count >= 10:
+        badges.append({"code": "ten_rides", "title": "Ten Rides", "meta": f"{count} rides and still counting."})
+    if total_km >= 1000:
+        badges.append({"code": "1000km", "title": "1,000 KM Club", "meta": f"{int(total_km)} km logged."})
+    if total_km >= 5000:
+        badges.append({"code": "5000km", "title": "5,000 KM Club", "meta": f"{int(total_km)} km logged."})
+    if total_km >= 10000:
+        badges.append({"code": "10000km", "title": "10,000 KM Club", "meta": f"{int(total_km)} km logged."})
+    if max_elev >= 3000:
+        badges.append({"code": "mountain", "title": "Mountain Rider", "meta": f"Crested {max_elev} m."})
+    if max_elev >= 4500:
+        badges.append({"code": "high_pass", "title": "High Pass", "meta": f"Above 4,500 m — thinner air, wider road."})
+    if longest >= 300:
+        badges.append({"code": "long_run", "title": "Long Run", "meta": f"{int(longest)} km in a single ride."})
+    if fastest >= 100:
+        badges.append({"code": "century_kmh", "title": "Century Club", "meta": f"Peaked at {int(fastest)} km/h."})
+    return {
+        "badges": badges,
+        "stats": {
+            "total_km": total_km,
+            "trips_completed": count,
+            "highest_point_m": max_elev,
+            "longest_ride_km": longest,
+            "top_speed_kmh": fastest,
+        },
+    }
+
+
 # ---------- Places (Nominatim search + Open-Elevation) ----------
 NOMINATIM_HEADERS = {"User-Agent": "Broad-Rider-Companion/1.0 (rider@broad.app)"}
 
@@ -500,6 +545,94 @@ async def root():
 
 # ---------- Mount ----------
 app.include_router(api)
+
+
+# ---------- WebSocket convoy (real-time positions) ----------
+class ConvoyHub:
+    def __init__(self) -> None:
+        self.rooms: dict = {}
+
+    async def join(self, trip_id: str, user_id: str, name: str, ws: WebSocket) -> None:
+        await ws.accept()
+        room = self.rooms.setdefault(trip_id, {})
+        room[user_id] = {"ws": ws, "name": name, "lat": None, "lng": None, "speed_kmh": 0, "updated_at": now_iso()}
+        await self.broadcast_state(trip_id)
+
+    def leave(self, trip_id: str, user_id: str) -> None:
+        room = self.rooms.get(trip_id)
+        if not room:
+            return
+        room.pop(user_id, None)
+        if not room:
+            self.rooms.pop(trip_id, None)
+
+    async def update(self, trip_id: str, user_id: str, data: dict) -> None:
+        room = self.rooms.get(trip_id, {})
+        if user_id not in room:
+            return
+        room[user_id]["lat"] = data.get("lat")
+        room[user_id]["lng"] = data.get("lng")
+        room[user_id]["speed_kmh"] = data.get("speed_kmh", 0)
+        room[user_id]["updated_at"] = now_iso()
+        await self.broadcast_state(trip_id)
+
+    async def broadcast_state(self, trip_id: str) -> None:
+        room = self.rooms.get(trip_id, {})
+        members = [
+            {
+                "user_id": uid,
+                "name": r["name"],
+                "lat": r["lat"],
+                "lng": r["lng"],
+                "speed_kmh": r["speed_kmh"],
+                "online": True,
+                "updated_at": r["updated_at"],
+            }
+            for uid, r in room.items()
+        ]
+        payload = {"type": "state", "members": members}
+        dead = []
+        for uid, r in list(room.items()):
+            try:
+                await r["ws"].send_json(payload)
+            except Exception:
+                dead.append(uid)
+        for uid in dead:
+            room.pop(uid, None)
+
+
+hub = ConvoyHub()
+
+
+@app.websocket("/api/ws/convoy/{trip_id}")
+async def ws_convoy(ws: WebSocket, trip_id: str, token: str = ""):
+    # Manual auth via query param
+    try:
+        payload = pyjwt.decode(token, get_jwt_secret(), algorithms=[JWT_ALGO])
+        uid = payload["sub"]
+    except Exception:
+        await ws.close(code=4401)
+        return
+    u = await db.users.find_one({"id": uid}, {"_id": 0})
+    if not u:
+        await ws.close(code=4403)
+        return
+    name = u.get("name", "Rider")
+    await hub.join(trip_id, uid, name, ws)
+    try:
+        while True:
+            msg = await ws.receive_json()
+            if msg.get("type") == "pos":
+                await hub.update(trip_id, uid, msg)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        hub.leave(trip_id, uid)
+        try:
+            await hub.broadcast_state(trip_id)
+        except Exception:
+            pass
+
 
 app.add_middleware(
     CORSMiddleware,

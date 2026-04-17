@@ -50,12 +50,17 @@ export default function Complete() {
         <View style={styles.section}>
           <Eyebrow>FIELD NOTE</Eyebrow>
           <Card style={{ marginTop: space.sm }}>
-            <Text style={[type.bodyLg, { color: colors.light.ink, fontFamily: 'Fraunces_500Medium' }]}>
-              {pickFromSeed(COMPLETE_NOTES, trip.id)}
-            </Text>
-            <Text style={[type.meta, { color: colors.light.inkMuted, marginTop: space.sm }]}>
-              {trip.actual_distance_km || trip.distance_km} KM · {Math.floor((trip.duration_min || 0) / 60)}H {(trip.duration_min || 0) % 60}M · TOP {trip.top_speed_kmh || 0} KM/H
-            </Text>
+            {(() => {
+              const note = pickFromSeed(COMPLETE_NOTES, trip.id);
+              return <>
+                <Text style={[type.bodyLg, { color: colors.light.ink, fontFamily: 'Fraunces_500Medium' }]}>
+                  {note.text}
+                </Text>
+                <Text style={[type.meta, { color: colors.light.inkMuted, marginTop: space.sm }]}>
+                  {trip.actual_distance_km || trip.distance_km} KM · {Math.floor((trip.duration_min || 0) / 60)}H {(trip.duration_min || 0) % 60}M · TOP {trip.top_speed_kmh || 0} KM/H
+                </Text>
+              </>;
+            })()}
           </Card>
         </View>
 

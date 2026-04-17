@@ -12,6 +12,7 @@ export default function Discover() {
   const router = useRouter();
   const [rides, setRides] = useState<any[]>([]);
   const [refreshing, setRefreshing] = useState(false);
+  const [joining, setJoining] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try { const { data } = await api.get('/trips/discover'); setRides(data); } catch {}
@@ -20,6 +21,16 @@ export default function Discover() {
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
   const onRefresh = async () => { setRefreshing(true); await load(); setRefreshing(false); };
+
+  const join = async (trip: any) => {
+    setJoining(trip.id);
+    try {
+      await api.post(`/trips/${trip.id}/join`);
+      router.push(`/trip/${trip.id}`);
+    } catch (e: any) {
+      alert(e?.response?.data?.detail || 'Could not join');
+    } finally { setJoining(null); }
+  };
 
   return (
     <SafeAreaView style={styles.container} edges={['top']} testID="discover-screen">
@@ -48,8 +59,12 @@ export default function Discover() {
               <View style={styles.metricsRow}>
                 <View style={styles.metric}><Meta>DIST</Meta><Text style={[type.h3, { color: colors.light.ink }]}>{r.distance_km}<Text style={type.meta}> KM</Text></Text></View>
                 <View style={styles.metric}><Meta>ELEV</Meta><Text style={[type.h3, { color: colors.light.ink }]}>{r.elevation_m}<Text style={type.meta}> M</Text></Text></View>
+                <View style={styles.metric}><Meta>DAYS</Meta><Text style={[type.h3, { color: colors.light.ink }]}>{r.days || 1}</Text></View>
                 <View style={styles.metric}><Meta>SEATS</Meta><Text style={[type.h3, { color: colors.light.ink }]}>{r.crew?.length || 0}</Text></View>
               </View>
+              <TouchableOpacity testID={`discover-join-${i}`} style={styles.joinBtn} onPress={(e) => { e.stopPropagation?.(); join(r); }} disabled={joining === r.id}>
+                <Meta style={{ color: '#FFFFFF' }}>{joining === r.id ? 'JOINING…' : 'REQUEST TO JOIN →'}</Meta>
+              </TouchableOpacity>
             </View>
           </TouchableOpacity>
         ))}
@@ -67,5 +82,6 @@ const styles = StyleSheet.create({
   cardBody: { padding: space.lg },
   metricsRow: { flexDirection: 'row', marginTop: space.md, gap: 32 },
   metric: { },
+  joinBtn: { marginTop: space.lg, backgroundColor: colors.light.ink, paddingVertical: 12, alignItems: 'center', borderRadius: radius.tiny },
   empty: { padding: space.xxl, alignItems: 'center' },
 });

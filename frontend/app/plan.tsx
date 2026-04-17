@@ -34,6 +34,7 @@ export default function Plan() {
   const [crewSearching, setCrewSearching] = useState(false);
   const crewTimer = useRef<any>(null);
   const [notes, setNotes] = useState('');
+  const [days, setDays] = useState(1);
   const [busy, setBusy] = useState(false);
   const [pickerFor, setPickerFor] = useState<'start' | 'end' | 'wp' | null>(null);
   const [query, setQuery] = useState('');
@@ -149,6 +150,20 @@ export default function Plan() {
           <View style={styles.section}>
             <Eyebrow>TRIP NAME</Eyebrow>
             <TextInput testID="plan-name-input" value={name} onChangeText={setName} style={styles.input} placeholderTextColor={colors.light.inkMuted} />
+          </View>
+
+          <View style={styles.section}>
+            <Eyebrow>DURATION — {days} DAY{days > 1 ? 'S' : ''}</Eyebrow>
+            <View style={styles.daysRow}>
+              <TouchableOpacity testID="plan-days-minus" onPress={() => setDays(Math.max(1, days - 1))} style={styles.daysBtn}>
+                <Feather name="minus" size={16} color={colors.light.ink} />
+              </TouchableOpacity>
+              <Text style={[type.h1, { color: colors.light.ink, minWidth: 40, textAlign: 'center' }]}>{days}</Text>
+              <TouchableOpacity testID="plan-days-plus" onPress={() => setDays(Math.min(14, days + 1))} style={styles.daysBtn}>
+                <Feather name="plus" size={16} color={colors.light.ink} />
+              </TouchableOpacity>
+              <Meta style={{ marginLeft: space.md }}>{days === 1 ? 'DAY TRIP' : `MULTI-DAY · ~${Math.round(distance / days)} KM/DAY`}</Meta>
+            </View>
           </View>
 
           <View style={styles.section}>
@@ -355,4 +370,6 @@ const styles = StyleSheet.create({
     flex: 1, paddingVertical: space.md,
     fontFamily: 'Fraunces_400Regular', fontSize: 16, color: colors.light.ink,
   },
+  daysRow: { flexDirection: 'row', alignItems: 'center', marginTop: space.sm, gap: 12 },
+  daysBtn: { borderWidth: 1, borderColor: colors.light.ink, width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: radius.tiny },
 });
