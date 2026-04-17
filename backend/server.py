@@ -427,6 +427,21 @@ async def my_active_sos(user: dict = Depends(get_current_user)):
     return SOSEvent(**doc)
 
 
+@api.get("/users/search")
+async def users_search(q: str, user: dict = Depends(get_current_user)):
+    """Search registered riders by name (case-insensitive). Excludes self. For crew invites."""
+    if not q or len(q.strip()) < 2:
+        return {"results": []}
+    pattern = {"$regex": q.strip(), "$options": "i"}
+    cursor = db.users.find(
+        {"name": pattern, "id": {"$ne": user["id"]}},
+        {"_id": 0, "password_hash": 0, "emergency_contacts": 0},
+    ).limit(10)
+    docs = await cursor.to_list(10)
+    results = [{"id": d["id"], "name": d.get("name", ""), "email": d.get("email", "")} for d in docs]
+    return {"results": results}
+
+
 # ---------- Places (Nominatim search + Open-Elevation) ----------
 NOMINATIM_HEADERS = {"User-Agent": "Broad-Rider-Companion/1.0 (rider@broad.app)"}
 

@@ -1,12 +1,12 @@
 import React, { useCallback, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, RefreshControl } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import { api } from '../../src/lib/api';
 import { colors, type, space, radius } from '../../src/theme/tokens';
 import { Eyebrow, Rule, Meta } from '../../src/components/ui';
-import { tripImage } from '../../src/lib/content';
+import { TripIllus } from '../../src/components/illustrations';
 
 export default function Discover() {
   const router = useRouter();
@@ -38,7 +38,7 @@ export default function Discover() {
           </View>
         ) : rides.map((r, i) => (
           <TouchableOpacity key={r.id} testID={`discover-card-${i}`} activeOpacity={0.85} onPress={() => router.push(`/trip/${r.id}`)} style={styles.card}>
-            <Image source={{ uri: tripImage(r) }} style={styles.image} />
+            <View style={styles.illusWrap}><TripIllus trip={r} width={360} height={180} /></View>
             <View style={styles.cardBody}>
               <Eyebrow>{(r.planned_date || 'TBD').toUpperCase()}</Eyebrow>
               <Text style={[type.h2, { color: colors.light.ink, marginTop: 4 }]}>{r.name}</Text>
@@ -63,6 +63,7 @@ const styles = StyleSheet.create({
   header: { padding: space.lg },
   card: { marginHorizontal: space.lg, marginTop: space.lg, borderWidth: 1, borderColor: colors.light.rule, borderRadius: radius.tiny, overflow: 'hidden', backgroundColor: colors.light.surface },
   image: { width: '100%', height: 180 },
+  illusWrap: { width: '100%', height: 180, borderBottomWidth: 1, borderBottomColor: colors.light.rule },
   cardBody: { padding: space.lg },
   metricsRow: { flexDirection: 'row', marginTop: space.md, gap: 32 },
   metric: { },

@@ -27,7 +27,12 @@ export default function Plan() {
   const [start, setStart] = useState(PRESETS[0]);
   const [end, setEnd] = useState(PRESETS[2]);
   const [waypoints, setWaypoints] = useState<typeof PRESETS>([]);
-  const [crewInput, setCrewInput] = useState('Rhea, Kabir');
+  const [crewList, setCrewList] = useState(['Rhea', 'Kabir']);
+  const [crewPickerOpen, setCrewPickerOpen] = useState(false);
+  const [crewQuery, setCrewQuery] = useState('');
+  const [crewResults, setCrewResults] = useState([]);
+  const [crewSearching, setCrewSearching] = useState(false);
+  const crewTimer = useRef<any>(null);
   const [notes, setNotes] = useState('');
   const [busy, setBusy] = useState(false);
   const [pickerFor, setPickerFor] = useState<'start' | 'end' | 'wp' | null>(null);
@@ -83,10 +88,25 @@ export default function Plan() {
     return Math.round(total * 1.25); // road factor
   }, [allPoints]);
 
+  // Debounced rider search
+  useEffect(() => {
+    if (!crewPickerOpen) return;
+    if (!crewQuery.trim() || crewQuery.trim().length < 2) { setCrewResults([]); return; }
+    if (crewTimer.current) clearTimeout(crewTimer.current);
+    crewTimer.current = setTimeout(async () => {
+      setCrewSearching(true);
+      try {
+        const { data } = await api.get('/users/search', { params: { q: crewQuery.trim() } });
+        setCrewResults(data.results || []);
+      } catch { setCrewResults([]); } finally { setCrewSearching(false); }
+    }, 300);
+    return () => { if (crewTimer.current) clearTimeout(crewTimer.current); };
+  }, [crewQuery, crewPickerOpen]);
+
   const submit = async () => {
     setBusy(true);
     try {
-      const crew = crewInput.split(',').map(s => s.trim()).filter(Boolean);
+      const crew = crewList;
       const { data } = await api.post('/trips', {
         name, start, end, waypoints,
         distance_km: distance,
@@ -160,8 +180,22 @@ export default function Plan() {
           </View>
 
           <View style={styles.section}>
-            <Eyebrow>CREW — comma separated names</Eyebrow>
-            <TextInput testID="plan-crew-input" value={crewInput} onChangeText={setCrewInput} style={styles.input} />
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Eyebrow>CREW — {crewList.length}</Eyebrow>
+              <TouchableOpacity testID="plan-crew-add" onPress={() => { setCrewPickerOpen(true); setCrewQuery(''); setCrewResults([]); }}>
+                <Meta style={{ color: colors.light.amber }}>+ ADD RIDER</Meta>
+              </TouchableOpacity>
+            </View>
+            {crewList.length === 0 ? (
+              <Text style={[type.body, { color: colors.light.inkMuted, marginTop: space.sm }]}>Ride alone, or tap ADD RIDER to invite someone.</Text>
+            ) : crewList.map((c, i) => (
+              <View key={i} style={styles.pickRow}>
+                <Text style={[type.body, { color: colors.light.ink }]}>{i + 1}. {c}</Text>
+                <TouchableOpacity onPress={() => setCrewList(crewList.filter((_, j) => j !== i))} testID={`plan-crew-remove-${i}`}>
+                  <Feather name="x" size={16} color={colors.light.inkMuted} />
+                </TouchableOpacity>
+              </View>
+            ))}
           </View>
 
           <View style={styles.section}>
@@ -184,6 +218,62 @@ export default function Plan() {
         </ScrollView>
       </KeyboardAvoidingView>
 
+      {crewPickerOpen && (
+        <View style={styles.picker}>
+          <View style={styles.pickerHead}>
+            <Eyebrow>ADD RIDER — SEARCH OR TYPE NAME</Eyebrow>
+            <TouchableOpacity onPress={() => { setCrewPickerOpen(false); setCrewQuery(''); }} testID="plan-crew-picker-close"><Feather name="x" size={20} color={colors.light.ink} /></TouchableOpacity>
+          </View>
+          <View style={{ paddingHorizontal: space.lg, paddingBottom: space.sm }}>
+            <View style={styles.searchRow}>
+              <Feather name="search" size={16} color={colors.light.inkMuted} />
+              <TextInput
+                testID="plan-crew-search"
+                value={crewQuery}
+                onChangeText={setCrewQuery}
+                placeholder="Search by name…"
+                placeholderTextColor={colors.light.inkMuted}
+                style={styles.searchInput}
+                autoFocus
+              />
+              {crewSearching && <ActivityIndicator size="small" color={colors.light.inkMuted} />}
+            </View>
+          </View>
+          <Rule />
+          <ScrollView keyboardShouldPersistTaps="handled">
+            {crewQuery.trim().length >= 2 && crewResults.map((r, i) => (
+              <TouchableOpacity key={r.id} testID={`plan-crew-result-${i}`} style={styles.pickerRow} onPress={() => {
+                if (!crewList.includes(r.name)) setCrewList([...crewList, r.name]);
+                setCrewPickerOpen(false); setCrewQuery('');
+              }}>
+                <View style={{ flex: 1 }}>
+                  <Text style={[type.body, { color: colors.light.ink }]}>{r.name}</Text>
+                  <Meta>REGISTERED RIDER · {r.email.toUpperCase()}</Meta>
+                </View>
+                <Meta style={{ color: colors.light.amber }}>ADD</Meta>
+              </TouchableOpacity>
+            ))}
+            {crewQuery.trim().length >= 1 && !crewSearching && (
+              <TouchableOpacity testID="plan-crew-add-custom" style={[styles.pickerRow, { borderTopWidth: 1, borderTopColor: colors.light.rule }]} onPress={() => {
+                const name = crewQuery.trim();
+                if (name && !crewList.includes(name)) setCrewList([...crewList, name]);
+                setCrewPickerOpen(false); setCrewQuery('');
+              }}>
+                <View style={{ flex: 1 }}>
+                  <Text style={[type.body, { color: colors.light.ink }]}>Add "{crewQuery.trim()}"</Text>
+                  <Meta>NOT ON BROAD YET — ADD AS NAME ONLY</Meta>
+                </View>
+                <Feather name="plus" size={16} color={colors.light.ink} />
+              </TouchableOpacity>
+            )}
+            {crewQuery.trim().length < 2 && (
+              <View style={{ padding: space.lg }}>
+                <Text style={[type.body, { color: colors.light.inkMuted }]}>Type at least 2 characters to search registered riders, or add a name for someone not on Broad yet.</Text>
+              </View>
+            )}
+          </ScrollView>
+        </View>
+      )}
       {pickerFor && (
         <View style={styles.picker}>
           <View style={styles.pickerHead}>

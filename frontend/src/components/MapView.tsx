@@ -1,11 +1,11 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import { Platform, View, StyleSheet, Text } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { colors, type } from '../theme/tokens';
 
 type Pt = { lat: number; lng: number; name?: string };
 
-function buildHtml(points: Pt[], dark: boolean, liveMarker?: Pt) {
+function buildHtml(points: Pt[], dark: boolean) {
   const tile = dark
     ? 'https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png'
     : 'https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png';
@@ -16,7 +16,6 @@ function buildHtml(points: Pt[], dark: boolean, liveMarker?: Pt) {
   const ink = dark ? '#FFFFFF' : '#1C1B1A';
   const bg = dark ? '#0A0A0A' : '#F7F5F0';
   const ptsJson = JSON.stringify(points);
-  const liveJson = JSON.stringify(liveMarker || null);
   return `<!doctype html><html><head>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
@@ -33,7 +32,6 @@ function buildHtml(points: Pt[], dark: boolean, liveMarker?: Pt) {
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
     const pts = ${ptsJson};
-    const live = ${liveJson};
     const map = L.map('m', { zoomControl:false, attributionControl:true, dragging:true, tap:false }).setView([20.5,78.9], 5);
     L.tileLayer('${tile}', { subdomains:'abcd', maxZoom:19, attribution:'© OSM · CartoDB' }).addTo(map);
     L.tileLayer('${labelTile}', { subdomains:'abcd', maxZoom:19, opacity:0.8 }).addTo(map);
@@ -45,12 +43,23 @@ function buildHtml(points: Pt[], dark: boolean, liveMarker?: Pt) {
         const icon = L.divIcon({ className:'', html:'<div class="pin'+(isEnd?'':' way')+'"></div>', iconSize:[14,14], iconAnchor:[7,7] });
         L.marker([p.lat, p.lng], { icon }).addTo(map);
       });
-      if (live) {
-        const licon = L.divIcon({ className:'', html:'<div class="pin live"></div>', iconSize:[18,18], iconAnchor:[9,9] });
-        L.marker([live.lat, live.lng], { icon: licon }).addTo(map);
-      }
       map.fitBounds(latlngs, { padding:[28,28], maxZoom:11 });
     }
+    let liveM = null;
+    const licon = L.divIcon({ className:'', html:'<div class="pin live"></div>', iconSize:[18,18], iconAnchor:[9,9] });
+    function setLive(lat, lng) {
+      if (lat == null || lng == null) return;
+      if (liveM) { liveM.setLatLng([lat, lng]); }
+      else { liveM = L.marker([lat, lng], { icon: licon }).addTo(map); }
+    }
+    function handle(raw) {
+      try {
+        const d = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        if (d && d.type === 'live') setLive(d.lat, d.lng);
+      } catch(e) {}
+    }
+    window.addEventListener('message', (e) => handle(e.data));
+    document.addEventListener('message', (e) => handle(e.data)); // RN WebView
   </script></body></html>`;
 }
 
@@ -67,8 +76,29 @@ export function MapView({
   dark?: boolean;
   liveMarker?: Pt;
 }) {
-  const html = useMemo(() => buildHtml(points, dark, liveMarker), [points, dark, liveMarker]);
+  // HTML only depends on points + dark (stable during Live Ride); liveMarker is pushed in via postMessage.
+  const html = useMemo(() => buildHtml(points, dark), [points, dark]);
   const t = dark ? colors.dark : colors.light;
+  const iframeRef = useRef<any>(null);
+  const webViewRef = useRef<any>(null);
+
+  useEffect(() => {
+    if (!liveMarker) return;
+    const msg = JSON.stringify({ type: 'live', lat: liveMarker.lat, lng: liveMarker.lng });
+    if (Platform.OS === 'web') {
+      try { iframeRef.current?.contentWindow?.postMessage(JSON.parse(msg), '*'); } catch {}
+    } else {
+      try { webViewRef.current?.postMessage?.(msg); } catch {}
+      try { webViewRef.current?.injectJavaScript?.(`window.dispatchEvent(new MessageEvent('message',{data:${msg}}));true;`); } catch {}
+    }
+  }, [liveMarker?.lat, liveMarker?.lng]);
+
+  // When html changes (e.g. Plan screen with new route), push the initial live marker once loaded
+  const onWebLoad = () => {
+    if (!liveMarker) return;
+    const msg = { type: 'live', lat: liveMarker.lat, lng: liveMarker.lng };
+    try { iframeRef.current?.contentWindow?.postMessage(msg, '*'); } catch {}
+  };
 
   if (!points || points.length === 0) {
     return (
@@ -82,7 +112,7 @@ export function MapView({
     return (
       <View style={[styles.frame, { width, height, borderColor: t.rule }]}>
         {/* @ts-ignore - iframe is a valid web tag */}
-        <iframe srcDoc={html} style={{ width, height, border: 0, display: 'block', background: t.bg }} />
+        <iframe ref={iframeRef} srcDoc={html} onLoad={onWebLoad} style={{ width, height, border: 0, display: 'block', background: t.bg }} />
       </View>
     );
   }
@@ -90,11 +120,18 @@ export function MapView({
   return (
     <View style={[styles.frame, { width, height, borderColor: t.rule, backgroundColor: t.bg }]}>
       <WebView
+        ref={webViewRef}
         originWhitelist={['*']}
         source={{ html }}
         style={{ width, height, backgroundColor: t.bg }}
         scrollEnabled={false}
         javaScriptEnabled
+        onLoadEnd={() => {
+          if (liveMarker) {
+            const msg = JSON.stringify({ type: 'live', lat: liveMarker.lat, lng: liveMarker.lng });
+            try { webViewRef.current?.injectJavaScript?.(`window.dispatchEvent(new MessageEvent('message',{data:${msg}}));true;`); } catch {}
+          }
+        }}
       />
     </View>
   );
