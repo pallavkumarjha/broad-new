@@ -6,12 +6,7 @@ import { Feather } from '@expo/vector-icons';
 import { api } from '../../src/lib/api';
 import { colors, type, space, radius } from '../../src/theme/tokens';
 import { Eyebrow, Rule, Meta } from '../../src/components/ui';
-
-const HEROES = [
-  'https://images.unsplash.com/photo-1764205821282-f28dd0e36c3c?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2OTF8MHwxfHNlYXJjaHwzfHxIaW1hbGF5YW4lMjBtb3RvcmN5Y2xlJTIwcm9hZHxlbnwwfHx8fDE3NzY0MDYwODJ8MA&ixlib=rb-4.1.0&q=85',
-  'https://images.unsplash.com/photo-1768410318390-c27c9170207f?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2ODh8MHwxfHNlYXJjaHwyfHxtb3RvcmN5Y2xlJTIwZ3JvdXAlMjByaWRlfGVufDB8fHx8MTc3NjQwNjA4Mnww&ixlib=rb-4.1.0&q=85',
-  'https://images.unsplash.com/photo-1767273133482-c1312aaf9f8e?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2OTF8MHwxfHNlYXJjaHwxfHxIaW1hbGF5YW4lMjBtb3RvcmN5Y2xlJTIwcm9hZHxlbnwwfHx8fDE3NzY0MDYwODJ8MA&ixlib=rb-4.1.0&q=85',
-];
+import { tripImage } from '../../src/lib/content';
 
 export default function Discover() {
   const router = useRouter();
@@ -43,7 +38,7 @@ export default function Discover() {
           </View>
         ) : rides.map((r, i) => (
           <TouchableOpacity key={r.id} testID={`discover-card-${i}`} activeOpacity={0.85} onPress={() => router.push(`/trip/${r.id}`)} style={styles.card}>
-            <Image source={{ uri: HEROES[i % HEROES.length] }} style={styles.image} />
+            <Image source={{ uri: tripImage(r) }} style={styles.image} />
             <View style={styles.cardBody}>
               <Eyebrow>{(r.planned_date || 'TBD').toUpperCase()}</Eyebrow>
               <Text style={[type.h2, { color: colors.light.ink, marginTop: 4 }]}>{r.name}</Text>

@@ -20,9 +20,14 @@ export default function Profile() {
           <Eyebrow>RIDER PROFILE</Eyebrow>
           <View style={styles.headRow}>
             <Text style={[type.h1, { color: colors.light.ink }]}>{user.name}</Text>
-            <TouchableOpacity testID="profile-settings-btn" onPress={() => router.push('/settings')} style={styles.iconBtn}>
-              <Feather name="settings" size={20} color={colors.light.ink} />
-            </TouchableOpacity>
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              <TouchableOpacity testID="profile-edit-btn" onPress={() => router.push('/profile/edit')} style={styles.iconBtn}>
+                <Feather name="edit-2" size={18} color={colors.light.ink} />
+              </TouchableOpacity>
+              <TouchableOpacity testID="profile-settings-btn" onPress={() => router.push('/settings')} style={styles.iconBtn}>
+                <Feather name="settings" size={20} color={colors.light.ink} />
+              </TouchableOpacity>
+            </View>
           </View>
           <Meta style={{ marginTop: 4 }}>{user.email.toUpperCase()}</Meta>
         </View>

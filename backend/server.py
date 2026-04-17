@@ -12,6 +12,7 @@ from typing import List, Optional, Literal
 
 import bcrypt
 import jwt as pyjwt
+import httpx
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -424,6 +425,57 @@ async def my_active_sos(user: dict = Depends(get_current_user)):
     if not doc:
         return None
     return SOSEvent(**doc)
+
+
+# ---------- Places (Nominatim search + Open-Elevation) ----------
+NOMINATIM_HEADERS = {"User-Agent": "Broad-Rider-Companion/1.0 (rider@broad.app)"}
+
+
+@api.get("/places/search")
+async def places_search(q: str, user: dict = Depends(get_current_user)):
+    """Free OpenStreetMap-backed geocoding. Limited to India by countrycodes=in."""
+    if not q or len(q.strip()) < 2:
+        return {"results": []}
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.get(
+                "https://nominatim.openstreetmap.org/search",
+                params={"q": q.strip(), "format": "json", "limit": 8, "countrycodes": "in", "addressdetails": 0},
+                headers=NOMINATIM_HEADERS,
+            )
+            data = r.json() if r.status_code == 200 else []
+        results = [
+            {"name": d.get("display_name", "").split(",")[0], "full": d.get("display_name", ""),
+             "lat": float(d["lat"]), "lng": float(d["lon"])}
+            for d in data
+        ]
+        return {"results": results}
+    except Exception as e:
+        logger.warning("nominatim error: %s", e)
+        return {"results": []}
+
+
+class ElevationIn(BaseModel):
+    points: List[Waypoint]
+
+
+@api.post("/places/elevation")
+async def places_elevation(body: ElevationIn, user: dict = Depends(get_current_user)):
+    """Real elevation via Open-Elevation. Returns per-point elevation_m and a simple max."""
+    if not body.points:
+        return {"elevations": [], "max_m": 0}
+    try:
+        async with httpx.AsyncClient(timeout=12) as c:
+            payload = {"locations": [{"latitude": p.lat, "longitude": p.lng} for p in body.points]}
+            r = await c.post("https://api.open-elevation.com/api/v1/lookup", json=payload)
+            if r.status_code != 200:
+                return {"elevations": [0] * len(body.points), "max_m": 0}
+            j = r.json()
+            elevs = [int(round(item.get("elevation", 0) or 0)) for item in j.get("results", [])]
+            return {"elevations": elevs, "max_m": max(elevs) if elevs else 0}
+    except Exception as e:
+        logger.warning("open-elevation error: %s", e)
+        return {"elevations": [0] * len(body.points), "max_m": 0}
 
 
 @api.get("/")

@@ -1,12 +1,12 @@
-import React, { useMemo, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform } from 'react-native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import { api } from '../src/lib/api';
 import { colors, type, space, radius } from '../src/theme/tokens';
 import { Eyebrow, Button, Rule, Meta } from '../src/components/ui';
-import { TopoMap } from '../src/components/TopoMap';
+import { MapView } from '../src/components/MapView';
 
 // Curated destination presets for India
 const PRESETS = [
@@ -31,8 +31,44 @@ export default function Plan() {
   const [notes, setNotes] = useState('');
   const [busy, setBusy] = useState(false);
   const [pickerFor, setPickerFor] = useState<'start' | 'end' | 'wp' | null>(null);
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<typeof PRESETS>(PRESETS);
+  const [searching, setSearching] = useState(false);
+  const [elevMax, setElevMax] = useState<number | null>(null);
+  const [elevLoading, setElevLoading] = useState(false);
+  const elevTimer = useRef<any>(null);
+  const searchTimer = useRef<any>(null);
 
   const allPoints = useMemo(() => [start, ...waypoints, end], [start, end, waypoints]);
+
+  // Debounced Nominatim search
+  useEffect(() => {
+    if (!pickerFor) return;
+    if (!query.trim()) { setResults(PRESETS); return; }
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const { data } = await api.get('/places/search', { params: { q: query.trim() } });
+        const mapped = (data.results || []).map((r: any) => ({ name: r.name, lat: r.lat, lng: r.lng }));
+        setResults(mapped.length ? mapped : []);
+      } catch { setResults([]); } finally { setSearching(false); }
+    }, 350);
+    return () => { if (searchTimer.current) clearTimeout(searchTimer.current); };
+  }, [query, pickerFor]);
+
+  // Debounced real elevation lookup
+  useEffect(() => {
+    if (elevTimer.current) clearTimeout(elevTimer.current);
+    elevTimer.current = setTimeout(async () => {
+      setElevLoading(true);
+      try {
+        const { data } = await api.post('/places/elevation', { points: allPoints });
+        setElevMax(data.max_m || 0);
+      } catch { setElevMax(null); } finally { setElevLoading(false); }
+    }, 600);
+    return () => { if (elevTimer.current) clearTimeout(elevTimer.current); };
+  }, [allPoints]);
 
   const distance = useMemo(() => {
     let total = 0;
@@ -54,7 +90,7 @@ export default function Plan() {
       const { data } = await api.post('/trips', {
         name, start, end, waypoints,
         distance_km: distance,
-        elevation_m: Math.round(distance * 3.5),
+        elevation_m: elevMax ?? Math.round(distance * 3.5),
         planned_date: new Date(Date.now() + 86400000 * 3).toISOString().slice(0, 10),
         crew, notes, is_public: false,
       });
@@ -75,13 +111,14 @@ export default function Plan() {
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={{ paddingBottom: space.xxl }}>
           <View style={{ alignItems: 'center', paddingVertical: space.md, backgroundColor: colors.light.surface }}>
-            <TopoMap points={allPoints} width={360} height={220} />
+            <MapView points={allPoints} width={360} height={220} />
           </View>
 
           <View style={styles.metricsRow}>
             <View style={styles.metric}><Meta>DISTANCE</Meta><Text style={[type.h2, { color: colors.light.ink, marginTop: 4 }]}>{distance}<Text style={type.meta}> KM</Text></Text></View>
             <View style={[styles.metric, { borderLeftWidth: 1, borderLeftColor: colors.light.rule, paddingLeft: space.md }]}>
-              <Meta>ELEV ESTIMATE</Meta><Text style={[type.h2, { color: colors.light.ink, marginTop: 4 }]}>{Math.round(distance * 3.5)}<Text style={type.meta}> M</Text></Text>
+              <Meta>HIGH POINT {elevLoading ? '· …' : ''}</Meta>
+              <Text style={[type.h2, { color: colors.light.ink, marginTop: 4 }]}>{elevMax ?? '—'}<Text style={type.meta}> M</Text></Text>
             </View>
             <View style={[styles.metric, { borderLeftWidth: 1, borderLeftColor: colors.light.rule, paddingLeft: space.md }]}>
               <Meta>STOPS</Meta><Text style={[type.h2, { color: colors.light.ink, marginTop: 4 }]}>{waypoints.length + 2}</Text>
@@ -150,19 +187,40 @@ export default function Plan() {
       {pickerFor && (
         <View style={styles.picker}>
           <View style={styles.pickerHead}>
-            <Eyebrow>PICK A POINT</Eyebrow>
-            <TouchableOpacity onPress={() => setPickerFor(null)} testID="plan-picker-close"><Feather name="x" size={20} color={colors.light.ink} /></TouchableOpacity>
+            <Eyebrow>SEARCH ANY PLACE IN INDIA</Eyebrow>
+            <TouchableOpacity onPress={() => { setPickerFor(null); setQuery(''); }} testID="plan-picker-close"><Feather name="x" size={20} color={colors.light.ink} /></TouchableOpacity>
+          </View>
+          <View style={{ paddingHorizontal: space.lg, paddingBottom: space.sm }}>
+            <View style={styles.searchRow}>
+              <Feather name="search" size={16} color={colors.light.inkMuted} />
+              <TextInput
+                testID="plan-picker-search"
+                value={query}
+                onChangeText={setQuery}
+                placeholder="Hampi, Tawang, Munnar…"
+                placeholderTextColor={colors.light.inkMuted}
+                style={styles.searchInput}
+                autoFocus
+              />
+              {searching && <ActivityIndicator size="small" color={colors.light.inkMuted} />}
+            </View>
           </View>
           <Rule />
-          <ScrollView>
-            {PRESETS.map((p, i) => (
+          <ScrollView keyboardShouldPersistTaps="handled">
+            {results.length === 0 && !searching ? (
+              <View style={{ padding: space.lg }}>
+                <Text style={[type.body, { color: colors.light.inkMuted }]}>Nothing found. Try a nearby town.</Text>
+              </View>
+            ) : results.map((p, i) => (
               <TouchableOpacity key={i} testID={`plan-picker-option-${i}`} style={styles.pickerRow} onPress={() => {
-                if (pickerFor === 'start') setStart(p);
-                else if (pickerFor === 'end') setEnd(p);
-                else setWaypoints([...waypoints, p]);
+                const point = { name: p.name, lat: p.lat, lng: p.lng };
+                if (pickerFor === 'start') setStart(point);
+                else if (pickerFor === 'end') setEnd(point);
+                else setWaypoints([...waypoints, point]);
                 setPickerFor(null);
+                setQuery('');
               }}>
-                <Text style={[type.body, { color: colors.light.ink }]}>{p.name}</Text>
+                <Text style={[type.body, { color: colors.light.ink }]} numberOfLines={1}>{p.name}</Text>
                 <Meta>{p.lat.toFixed(2)}°N {p.lng.toFixed(2)}°E</Meta>
               </TouchableOpacity>
             ))}
@@ -196,6 +254,15 @@ const styles = StyleSheet.create({
   pickerHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: space.lg },
   pickerRow: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingHorizontal: space.lg, paddingVertical: space.md, borderBottomWidth: 1, borderBottomColor: colors.light.rule,
+    paddingHorizontal: space.lg, paddingVertical: space.md, borderBottomWidth: 1, borderBottomColor: colors.light.rule, gap: 12,
+  },
+  searchRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    borderWidth: 1, borderColor: colors.light.rule, borderRadius: radius.tiny,
+    paddingHorizontal: space.md, backgroundColor: '#FFFFFF',
+  },
+  searchInput: {
+    flex: 1, paddingVertical: space.md,
+    fontFamily: 'Fraunces_400Regular', fontSize: 16, color: colors.light.ink,
   },
 });

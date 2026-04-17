@@ -34,7 +34,7 @@ export default function SOS() {
 
   const resolve = async () => {
     try { await api.post(`/sos/${id}/resolve`); } catch {}
-    router.back();
+    router.replace(`/sos/safe/${id}`);
   };
 
   return (

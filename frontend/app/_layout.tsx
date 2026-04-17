@@ -6,6 +6,7 @@ import { View, ActivityIndicator } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { AuthProvider } from '../src/contexts/AuthContext';
+import { SettingsProvider } from '../src/contexts/SettingsContext';
 import { colors } from '../src/theme/tokens';
 
 export default function RootLayout() {
@@ -23,14 +24,16 @@ export default function RootLayout() {
   return (
     <SafeAreaProvider>
       <AuthProvider>
-        <StatusBar style="dark" />
-        <Stack
-          screenOptions={{
-            headerShown: false,
-            contentStyle: { backgroundColor: colors.light.bg },
-            animation: 'fade',
-          }}
-        />
+        <SettingsProvider>
+          <StatusBar style="dark" />
+          <Stack
+            screenOptions={{
+              headerShown: false,
+              contentStyle: { backgroundColor: colors.light.bg },
+              animation: 'fade',
+            }}
+          />
+        </SettingsProvider>
       </AuthProvider>
     </SafeAreaProvider>
   );

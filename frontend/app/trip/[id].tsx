@@ -6,7 +6,7 @@ import { Feather } from '@expo/vector-icons';
 import { api } from '../../src/lib/api';
 import { colors, type, space } from '../../src/theme/tokens';
 import { Eyebrow, Rule, SpecRow, Button, Meta, Card } from '../../src/components/ui';
-import { TopoMap } from '../../src/components/TopoMap';
+import { MapView } from '../../src/components/MapView';
 
 export default function TripDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -61,7 +61,7 @@ export default function TripDetail() {
           </Meta>
         </View>
         <View style={{ alignItems: 'center', backgroundColor: colors.light.surface, paddingVertical: space.md }}>
-          <TopoMap points={allPoints} width={360} height={200} />
+          <MapView points={allPoints} width={360} height={200} />
         </View>
 
         <View style={styles.section}>

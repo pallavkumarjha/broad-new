@@ -1,14 +1,25 @@
 import pytest
 import requests
 import os
+from pathlib import Path
 
 
 @pytest.fixture(scope="session")
 def base_url():
-    """Get base URL from environment"""
+    """Get backend URL from environment"""
+    # Try EXPO_PUBLIC_BACKEND_URL first (from environment), then fallback to frontend env file
     url = os.environ.get("EXPO_PUBLIC_BACKEND_URL")
     if not url:
-        pytest.fail("EXPO_PUBLIC_BACKEND_URL not set in environment")
+        # Read from frontend/.env
+        frontend_env = Path(__file__).parent.parent.parent / "frontend" / ".env"
+        if frontend_env.exists():
+            with open(frontend_env) as f:
+                for line in f:
+                    if line.startswith("EXPO_PUBLIC_BACKEND_URL="):
+                        url = line.split("=", 1)[1].strip().strip('"')
+                        break
+    if not url:
+        pytest.fail("EXPO_PUBLIC_BACKEND_URL not set in environment or frontend/.env")
     return url.rstrip("/")
 
 

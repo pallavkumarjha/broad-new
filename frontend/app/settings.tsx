@@ -1,17 +1,15 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { View, Text, StyleSheet, ScrollView, Switch, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import { colors, type, space } from '../src/theme/tokens';
 import { Eyebrow, Rule, Card } from '../src/components/ui';
+import { useSettings } from '../src/contexts/SettingsContext';
 
 export default function Settings() {
   const router = useRouter();
-  const [bgLoc, setBgLoc] = useState(true);
-  const [crash, setCrash] = useState(true);
-  const [shareLoc, setShareLoc] = useState(false);
-  const [haptics, setHaptics] = useState(true);
+  const { settings, update } = useSettings();
 
   const Row = ({ label, sublabel, value, onChange, testID }: any) => (
     <View style={styles.row}>
@@ -35,18 +33,18 @@ export default function Settings() {
         <View style={styles.section}>
           <Eyebrow>RIDE</Eyebrow>
           <Card style={{ marginTop: space.sm }}>
-            <Row label="Background location" sublabel="REQUIRED FOR LIVE RIDE & CONVOY" value={bgLoc} onChange={setBgLoc} testID="setting-bg-location" />
+            <Row label="Background location" sublabel="REQUIRED FOR LIVE RIDE & CONVOY" value={settings.bgLocation} onChange={(v: boolean) => update({ bgLocation: v })} testID="setting-bg-location" />
             <Rule />
-            <Row label="Crash detection" sublabel="AUTO-TRIGGER SOS ON IMPACT" value={crash} onChange={setCrash} testID="setting-crash" />
+            <Row label="Crash detection" sublabel="AUTO-TRIGGER SOS ON IMPACT" value={settings.crashDetect} onChange={(v: boolean) => update({ crashDetect: v })} testID="setting-crash" />
             <Rule />
-            <Row label="Share live location" sublabel="VISIBLE TO YOUR CREW" value={shareLoc} onChange={setShareLoc} testID="setting-share-loc" />
+            <Row label="Share live location" sublabel="VISIBLE TO YOUR CREW" value={settings.shareLiveLocation} onChange={(v: boolean) => update({ shareLiveLocation: v })} testID="setting-share-loc" />
           </Card>
         </View>
 
         <View style={styles.section}>
           <Eyebrow>FEEL</Eyebrow>
           <Card style={{ marginTop: space.sm }}>
-            <Row label="Haptic feedback" sublabel="LIGHT TAPS ON ACTIONS" value={haptics} onChange={setHaptics} testID="setting-haptics" />
+            <Row label="Haptic feedback" sublabel="LIGHT TAPS ON ACTIONS" value={settings.haptics} onChange={(v: boolean) => update({ haptics: v })} testID="setting-haptics" />
           </Card>
         </View>
 

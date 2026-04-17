@@ -6,7 +6,7 @@ import { Feather } from '@expo/vector-icons';
 import { api } from '../../src/lib/api';
 import { colors, type, space, fonts } from '../../src/theme/tokens';
 import { Eyebrow, Meta } from '../../src/components/ui';
-import { TopoMap } from '../../src/components/TopoMap';
+import { MapView } from '../../src/components/MapView';
 import { SOSButton } from '../../src/components/SOSButton';
 
 // Live Ride — DARK MODE instrument panel.
@@ -105,7 +105,7 @@ export default function LiveRide() {
         <ScrollView contentContainerStyle={{ paddingBottom: space.xl }}>
           {/* Map */}
           <View style={{ alignItems: 'center', paddingTop: space.sm }}>
-            <TopoMap points={allPoints} dark width={360} height={200} liveMarker={liveMarker} />
+            <MapView points={allPoints} dark width={360} height={200} liveMarker={liveMarker} />
           </View>
 
           {/* Speedometer */}

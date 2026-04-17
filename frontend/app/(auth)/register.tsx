@@ -19,7 +19,7 @@ export default function Register() {
     setErr(''); setBusy(true);
     try {
       await signUp(email.trim(), password, name.trim() || 'Rider');
-      router.replace('/(tabs)');
+      router.replace('/profile/edit?onboarding=1');
     } catch (e: any) {
       setErr(e.message || 'Registration failed');
     } finally { setBusy(false); }

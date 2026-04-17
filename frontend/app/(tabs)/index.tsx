@@ -7,6 +7,7 @@ import { useAuth } from '../../src/contexts/AuthContext';
 import { api } from '../../src/lib/api';
 import { colors, type, space, radius, fonts } from '../../src/theme/tokens';
 import { Eyebrow, Card, Rule, Meta } from '../../src/components/ui';
+import { FIELD_NOTES, pickFromSeed } from '../../src/lib/content';
 
 type Trip = any;
 
@@ -103,7 +104,7 @@ export default function Home() {
           <Eyebrow>FIELD NOTE</Eyebrow>
           <Card style={{ marginTop: space.sm }}>
             <Text style={[type.bodyLg, { color: colors.light.ink, fontFamily: fonts.serifMed }]}>
-              "Distance is measured in hours.{'\n'}Memory is measured in miles."
+              {pickFromSeed(FIELD_NOTES, new Date().toDateString() + (user?.id || ''))}
             </Text>
             <Text style={[type.meta, { color: colors.light.inkMuted, marginTop: space.md }]}>— RIDER'S ALMANAC</Text>
           </Card>

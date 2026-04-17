@@ -5,7 +5,8 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { api } from '../../src/lib/api';
 import { colors, type, space } from '../../src/theme/tokens';
 import { Eyebrow, Rule, SpecRow, Button, Card } from '../../src/components/ui';
-import { TopoMap } from '../../src/components/TopoMap';
+import { MapView } from '../../src/components/MapView';
+import { COMPLETE_NOTES, pickFromSeed } from '../../src/lib/content';
 
 export default function Complete() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -32,7 +33,7 @@ export default function Complete() {
         <Rule />
 
         <View style={{ alignItems: 'center', backgroundColor: colors.light.surface, paddingVertical: space.md }}>
-          <TopoMap points={allPoints} width={360} height={200} />
+          <MapView points={allPoints} width={360} height={200} />
         </View>
 
         <View style={styles.section}>
@@ -50,7 +51,10 @@ export default function Complete() {
           <Eyebrow>FIELD NOTE</Eyebrow>
           <Card style={{ marginTop: space.sm }}>
             <Text style={[type.bodyLg, { color: colors.light.ink, fontFamily: 'Fraunces_500Medium' }]}>
-              Another road remembered. The bike rests. So do you.
+              {pickFromSeed(COMPLETE_NOTES, trip.id)}
+            </Text>
+            <Text style={[type.meta, { color: colors.light.inkMuted, marginTop: space.sm }]}>
+              {trip.actual_distance_km || trip.distance_km} KM · {Math.floor((trip.duration_min || 0) / 60)}H {(trip.duration_min || 0) % 60}M · TOP {trip.top_speed_kmh || 0} KM/H
             </Text>
           </Card>
         </View>
