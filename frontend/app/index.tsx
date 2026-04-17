@@ -1,30 +1,43 @@
-import { Text, View, StyleSheet, Image } from "react-native";
+import React, { useEffect } from 'react';
+import { View, Text, StyleSheet, ActivityIndicator } from 'react-native';
+import { useRouter } from 'expo-router';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { useAuth } from '../src/contexts/AuthContext';
+import { colors, type, space } from '../src/theme/tokens';
 
-const EXPO_PUBLIC_BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL;
+export default function Splash() {
+  const { user, loading } = useAuth();
+  const router = useRouter();
 
-export default function Index() {
-  console.log(EXPO_PUBLIC_BACKEND_URL, "EXPO_PUBLIC_BACKEND_URL");
+  useEffect(() => {
+    if (loading) return;
+    const t = setTimeout(() => {
+      if (user) router.replace('/(tabs)');
+      else router.replace('/(auth)/login');
+    }, 600);
+    return () => clearTimeout(t);
+  }, [user, loading, router]);
 
   return (
-    <View style={styles.container}>
-      <Image
-        source={require("../assets/images/app-image.png")}
-        style={styles.image}
-      />
-    </View>
+    <SafeAreaView style={styles.container} testID="splash-screen">
+      <View style={styles.center}>
+        <Text style={[type.eyebrow, { color: colors.light.inkMuted, marginBottom: space.sm }]}>EST. 2026 — INDIA</Text>
+        <Text style={[type.display, { color: colors.light.ink, marginBottom: space.xs }]}>Broad</Text>
+        <View style={styles.rule} />
+        <Text style={[type.bodyLg, { color: colors.light.inkMuted, marginTop: space.md, textAlign: 'center', maxWidth: 280 }]}>
+          The rider's companion.{'\n'}Plan, ride together, stay safe.
+        </Text>
+      </View>
+      <View style={styles.footer}>
+        <ActivityIndicator color={colors.light.amber} size="small" />
+      </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#0c0c0c",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  image: {
-    width: "100%",
-    height: "100%",
-    resizeMode: "contain",
-  },
+  container: { flex: 1, backgroundColor: colors.light.bg },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: space.xl },
+  rule: { width: 64, height: 1, backgroundColor: colors.light.ink, marginTop: space.md },
+  footer: { paddingBottom: space.xl, alignItems: 'center' },
 });
