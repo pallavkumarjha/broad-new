@@ -1,0 +1,203 @@
+{
+  "app_context": {
+    "name": "Broad — The Rider's Companion",
+    "domain": "Motorcycle rider companion app (India, group riders, weekend warriors, touring clubs)",
+    "archetype": "Hybrid: Archetype 1 (Organic & Earthy / Analog Print) for standard app flows + Archetype 4 (Swiss / Instrument Panel) for Dark Mode (Live Ride/SOS)",
+    "aesthetic_guidelines": [
+      "Unusual restraint: quiet, considered, analog, minimalist.",
+      "Inspired by print logic, instrument panels, Scandinavian industrial design, field journals.",
+      "NO gamer/MotoGP aesthetic. NO drop-shadow heavy cards. NO tyre-tread borders.",
+      "NO heavy rounded corners (use tiny radius only).",
+      "NO chrome textures. NO emojis."
+    ],
+    "platform": "React Native (Expo)"
+  },
+  "color_system": {
+    "light_mode": {
+      "background_base": "#F7F5F0",
+      "surface_card": "#EFECE5",
+      "text_ink_primary": "#1C1B1A",
+      "text_ink_secondary": "#595754",
+      "border_subtle": "#D4D1C9",
+      "accent_amber": "#D96606",
+      "status_success": "#2D5939",
+      "status_error": "#A52A2A"
+    },
+    "dark_mode": {
+      "background_base": "#0A0A0A",
+      "surface_card": "#141414",
+      "text_primary": "#FFFFFF",
+      "text_secondary": "#A3A3A3",
+      "border_subtle": "#262626",
+      "accent_amber": "#FF8C00",
+      "status_sos": "#FF3B30",
+      "status_safe": "#22C55E"
+    }
+  },
+  "typography": {
+    "font_families": {
+      "serif": "Fraunces",
+      "mono": "JetBrains Mono"
+    },
+    "scale": {
+      "instrument_numeral": { "fontFamily": "Fraunces", "fontSize": 72, "letterSpacing": -2, "lineHeight": 76 },
+      "display_large": { "fontFamily": "Fraunces", "fontSize": 40, "letterSpacing": -1, "lineHeight": 44 },
+      "h1": { "fontFamily": "Fraunces", "fontSize": 32, "letterSpacing": -0.5, "lineHeight": 36 },
+      "h2": { "fontFamily": "Fraunces", "fontSize": 24, "letterSpacing": 0, "lineHeight": 28 },
+      "h3": { "fontFamily": "Fraunces", "fontSize": 20, "letterSpacing": 0, "lineHeight": 24 },
+      "body_large": { "fontFamily": "Fraunces", "fontSize": 18, "letterSpacing": 0, "lineHeight": 26 },
+      "body": { "fontFamily": "Fraunces", "fontSize": 16, "letterSpacing": 0, "lineHeight": 24 },
+      "metadata": { "fontFamily": "JetBrains Mono", "fontSize": 12, "letterSpacing": 1, "textTransform": "uppercase" },
+      "eyebrow": { "fontFamily": "JetBrains Mono", "fontSize": 10, "letterSpacing": 1.5, "textTransform": "uppercase" }
+    }
+  },
+  "spacing_and_layout": {
+    "base_rhythm": 4,
+    "scale": {
+      "xs": 4,
+      "sm": 8,
+      "md": 16,
+      "lg": 24,
+      "xl": 32,
+      "xxl": 48
+    },
+    "container_padding": 16,
+    "border_radius": {
+      "none": 0,
+      "tiny": 2,
+      "sm": 4,
+      "full": 9999
+    },
+    "rules": [
+      "Print-editorial grid: Eyebrow / Headline / Deck / Body / Rule.",
+      "Use explicit 1px borders instead of drop shadows for visual hierarchy.",
+      "Use horizontal rules (1px borders) to separate list items (Spec Rows)."
+    ]
+  },
+  "components": {
+    "card": {
+      "backgroundColor": "surface_card",
+      "borderWidth": 1,
+      "borderColor": "border_subtle",
+      "borderRadius": "sm",
+      "padding": "lg",
+      "shadow": "none"
+    },
+    "spec_row": {
+      "layout": "flex-row, justify-between, items-center",
+      "paddingVertical": "md",
+      "borderBottomWidth": 1,
+      "borderColor": "border_subtle"
+    },
+    "button_primary": {
+      "backgroundColor": "text_ink_primary",
+      "textColor": "background_base",
+      "borderRadius": "sm",
+      "paddingVertical": "md",
+      "paddingHorizontal": "lg",
+      "fontFamily": "Fraunces"
+    },
+    "button_sos": {
+      "backgroundColor": "status_sos",
+      "textColor": "text_primary",
+      "borderRadius": "full",
+      "paddingVertical": "xl",
+      "layout": "center",
+      "fontFamily": "JetBrains Mono",
+      "fontSize": 16,
+      "letterSpacing": 2
+    },
+    "tab_bar": {
+      "backgroundColor": "background_base",
+      "borderTopWidth": 1,
+      "borderColor": "border_subtle",
+      "iconFamily": "Feather"
+    }
+  },
+  "motion_system": {
+    "philosophy": "Still, not busy. Animations carry meaning.",
+    "allowed_animations": ["Rise-in (fade and translate up)", "Draw-in (opacity fade)", "Ripple (button feedback)"],
+    "forbidden_animations": ["Bounces", "Spring physics", "Parallax"]
+  },
+  "screens": {
+    "1_splash_auth": {
+      "theme": "Light",
+      "layout": "Minimalist center-aligned brand mark, email/password standard inputs with thin borders. Onboarding uses large Fraunces typography, quiet aesthetic."
+    },
+    "2_home_dashboard": {
+      "theme": "Light",
+      "layout": "Eyebrow greeting (JetBrains Mono), H1 name. Quick actions (Plan/Find) in stark minimal boxes. Upcoming trips list separated by fine rules. If trip active, show dark mode card as entry point."
+    },
+    "3_trip_planner": {
+      "theme": "Light",
+      "layout": "Map-centric top half, bottom sheet for plotting route. Input fields for waypoints. Metadata (distance/elevation) in JetBrains Mono."
+    },
+    "4_trip_details": {
+      "theme": "Light",
+      "layout": "Pre-ride briefing. Editorial print layout: Route stats, crew list with tiny avatars, packing notes. Large Primary CTA 'START TRIP' anchored at bottom."
+    },
+    "5_live_ride": {
+      "theme": "Dark",
+      "layout": "Instrument-panel feel. Dark map, massive Fraunces speedometer. Rider stats (distance, time) in JetBrains Mono. Prominent red/amber SOS button (long-press). Total dark immersion."
+    },
+    "6_sos_active": {
+      "theme": "Dark",
+      "layout": "Critical alert. Deep obsidian background. Blinking or solid red accent. Broadcast confirmation text, coordinates in JetBrains. 'I AM SAFE' cancel button (long-press) at bottom."
+    },
+    "7_convoy_list": {
+      "theme": "Light / Dark (inherited)",
+      "layout": "Simple spec row list. Name in Fraunces, health/position in JetBrains Mono. Minimalist dot indicators for connection status."
+    },
+    "8_trips_archive": {
+      "theme": "Light",
+      "layout": "Top tabs (Active / Upcoming / Past) underlined. List of past trips formatted like journal entries. High contrast, ink on paper."
+    },
+    "9_discover": {
+      "theme": "Light",
+      "layout": "Public rides feed. Large imagery, minimal text overlays. Standard padding, editorial cards."
+    },
+    "10_profile": {
+      "theme": "Light",
+      "layout": "Stats grid (total km, trips, alt) using monospace numbers. Bike details in spec rows. Emergency contacts listed cleanly with horizontal rules."
+    },
+    "11_trip_complete": {
+      "theme": "Light",
+      "layout": "Safely home summary. Large Fraunces headline 'RIDE COMPLETE'. Statistics breakdown like a printed receipt or journal log."
+    },
+    "12_convoy_chat": {
+      "theme": "Light / Dark",
+      "layout": "Extremely minimal in-ride comms. No chat bubbles, just raw text streams separated by lines. Metadata timestamp for each message."
+    },
+    "13_settings": {
+      "theme": "Light",
+      "layout": "Standard list view with toggle components (pill-shaped, tiny radius). Minimalist."
+    }
+  },
+  "assets": {
+    "hero_himalayan_road": {
+      "url": "https://images.unsplash.com/photo-1764205821282-f28dd0e36c3c?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2OTF8MHwxfHNlYXJjaHwzfHxIaW1hbGF5YW4lMjBtb3RvcmN5Y2xlJTIwcm9hZHxlbnwwfHx8fDE3NzY0MDYwODJ8MA&ixlib=rb-4.1.0&q=85",
+      "description": "Man sitting by motorcycle overlooking lush green mountains",
+      "usage": "Discover feed placeholder or Trip Complete background"
+    },
+    "hero_group_ride": {
+      "url": "https://images.unsplash.com/photo-1768410318390-c27c9170207f?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2ODh8MHwxfHNlYXJjaHwyfHxtb3RvcmN5Y2xlJTIwZ3JvdXAlMjByaWRlfGVufDB8fHx8MTc3NjQwNjA4Mnww&ixlib=rb-4.1.0&q=85",
+      "description": "Group of motorcyclists riding on a mountain road",
+      "usage": "Trip Details hero image or Welcome screen"
+    },
+    "texture_analog": {
+      "url": "https://images.unsplash.com/photo-1767273133482-c1312aaf9f8e?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2OTF8MHwxfHNlYXJjaHwxfHxIaW1hbGF5YW4lMjBtb3RvcmN5Y2xlJTIwcm9hZHxlbnwwfHx8fDE3NzY0MDYwODJ8MA&ixlib=rb-4.1.0&q=85",
+      "description": "Motorcycle parked on a road surrounded by greenery",
+      "usage": "Trip Archive placeholder"
+    }
+  },
+  "tech_stack": {
+    "framework": "React Native (Expo)",
+    "styling": "StyleSheet / React Native View Styles (No Tailwind)",
+    "fonts_package": "@expo-google-fonts/fraunces, @expo-google-fonts/jetbrains-mono",
+    "icons_package": "@expo/vector-icons (Feather)"
+  },
+  "accessibility_and_testing": {
+    "contrast_ratio": "Ensure minimum 4.5:1 for standard text against Paper/Obsidian backgrounds.",
+    "testing_attributes": "All interactive and key informational elements MUST include a `data-testid` attribute (e.g. data-testid='sos-activate-button', data-testid='plan-trip-card')."
+  }
+}
