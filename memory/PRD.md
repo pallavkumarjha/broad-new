@@ -4,6 +4,22 @@
 Quiet, considered, analog companion app for motorcycle riders in India. Built around four pillars:
 **Plan · Ride together · SOS · Glovebox** (Glovebox deferred from V1).
 
+## V1.1 — Round 2 Completions (items 7-18 from audit)
+- **Real maps** — Replaced SVG topo placeholder with Leaflet + OSM / CartoDB tiles (iframe on web, WebView on native). Light theme on Plan / Trip Detail / Complete; dark theme on Live Ride & SOS.
+- **Real place search** — New `/api/places/search` proxies Nominatim (OSM). Plan picker now has a search box that returns real India-restricted results; the 9 hardcoded presets are only the initial list.
+- **Real elevation** — New `/api/places/elevation` proxies Open-Elevation. Plan screen shows a live "HIGH POINT" metric in metres for the current route. Saved trips store the real elevation.
+- **Per-trip hero images** — Discover cards now use keyword-bucketed Unsplash images keyed deterministically by trip id (Himalaya / Ghats / Coast / default).
+- **Rotating field notes** — Home's "Field Note" quote rotates daily from a library of 6 quotes; Trip Complete's field note rotates per-trip with a stat subtitle.
+- **Persistent Settings** — Settings toggles now live in a `SettingsContext` backed by `expo-secure-store` / `localStorage` and survive app restarts.
+- **Profile edit** — New `/profile/edit` screen lets riders update name, bike (make/model/reg/odometer), and emergency contacts (add/remove). Saves via `PATCH /api/users/me`.
+- **Onboarding redirect** — After sign-up, new riders go to `/profile/edit?onboarding=1` with a welcome header + SKIP FOR NOW option, so new accounts aren't blank.
+- **SOS resolve confirmation** — After the 2s "I AM SAFE" hold, users see a dedicated `/sos/safe/[id]` screen ("Stay safe.") for 6s before returning to Home.
+
+## Tech additions in V1.1
+- `httpx` on backend for Nominatim + Open-Elevation proxies
+- `react-native-webview` for native map rendering; `<iframe srcDoc>` for web
+- `SettingsContext` with secure-store / localStorage persistence
+
 ## V1.0 — What Shipped
 1. **Auth** — Email + password (JWT, bcrypt). Token stored in expo-secure-store / localStorage.
 2. **Home Dashboard** — Greeting, quick actions (Plan / Find), upcoming trips, active trip card, "field note" quote card.
