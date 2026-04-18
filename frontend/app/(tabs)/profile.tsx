@@ -107,6 +107,26 @@ export default function Profile() {
         </View>
 
         <View style={styles.section}>
+          <Eyebrow>GLOVEBOX</Eyebrow>
+          <TouchableOpacity
+            testID="profile-glovebox-btn"
+            onPress={() => router.push('/glovebox')}
+            style={styles.gloveboxCard}
+          >
+            <View style={styles.gloveboxInner}>
+              <View style={styles.gloveboxIcon}>
+                <Feather name="lock" size={18} color={colors.light.ink} />
+              </View>
+              <View style={{ flex: 1, marginLeft: 14 }}>
+                <Text style={[type.h3, { color: colors.light.ink }]}>Your documents.</Text>
+                <Meta style={{ marginTop: 2 }}>RC · INSURANCE · LICENCE · MEDICAL — DEVICE ONLY</Meta>
+              </View>
+              <Feather name="chevron-right" size={18} color={colors.light.inkMuted} />
+            </View>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.section}>
           <Button label="SIGN OUT" variant="ghost" testID="profile-signout-btn" onPress={async () => { await signOut(); router.replace('/(auth)/login'); }} />
         </View>
       </ScrollView>
@@ -127,4 +147,7 @@ const styles = StyleSheet.create({
   contactRowDivider: { borderBottomWidth: 1, borderBottomColor: colors.light.rule },
   badgeRow: { flexDirection: 'row', alignItems: 'center', padding: space.md, borderWidth: 1, borderColor: colors.light.rule, backgroundColor: colors.light.surface, gap: 12 },
   badgeDot: { width: 32, height: 32, borderRadius: 16, borderWidth: 1, borderColor: colors.light.amber, alignItems: 'center', justifyContent: 'center' },
+  gloveboxCard: { marginTop: space.sm, borderWidth: 1, borderColor: colors.light.rule, borderRadius: 2, backgroundColor: colors.light.surface },
+  gloveboxInner: { flexDirection: 'row', alignItems: 'center', padding: space.lg },
+  gloveboxIcon: { width: 36, height: 36, borderRadius: 18, borderWidth: 1, borderColor: colors.light.rule, alignItems: 'center', justifyContent: 'center' },
 });
