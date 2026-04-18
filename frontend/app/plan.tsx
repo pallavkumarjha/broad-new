@@ -27,7 +27,8 @@ export default function Plan() {
   const [start, setStart] = useState(PRESETS[0]);
   const [end, setEnd] = useState(PRESETS[2]);
   const [waypoints, setWaypoints] = useState<typeof PRESETS>([]);
-  const [crewList, setCrewList] = useState(['Rhea', 'Kabir']);
+  const [crewList, setCrewList] = useState<string[]>(['Rhea', 'Kabir']);
+  const [crewIdsList, setCrewIdsList] = useState<string[]>([]); // user IDs for push notifications
   const [crewPickerOpen, setCrewPickerOpen] = useState(false);
   const [crewQuery, setCrewQuery] = useState('');
   const [crewResults, setCrewResults] = useState([]);
@@ -107,13 +108,15 @@ export default function Plan() {
   const submit = async () => {
     setBusy(true);
     try {
-      const crew = crewList;
       const { data } = await api.post('/trips', {
         name, start, end, waypoints,
         distance_km: distance,
         elevation_m: elevMax ?? Math.round(distance * 3.5),
         planned_date: new Date(Date.now() + 86400000 * 3).toISOString().slice(0, 10),
-        crew, notes, is_public: false,
+        crew: crewList,
+        crew_ids: crewIdsList,
+        notes,
+        is_public: false,
       });
       router.replace(`/trip/${data.id}`);
     } catch (e: any) {
@@ -256,9 +259,12 @@ export default function Plan() {
           </View>
           <Rule />
           <ScrollView keyboardShouldPersistTaps="handled">
-            {crewQuery.trim().length >= 2 && crewResults.map((r, i) => (
+            {crewQuery.trim().length >= 2 && crewResults.map((r: any, i: number) => (
               <TouchableOpacity key={r.id} testID={`plan-crew-result-${i}`} style={styles.pickerRow} onPress={() => {
-                if (!crewList.includes(r.name)) setCrewList([...crewList, r.name]);
+                if (!crewList.includes(r.name)) {
+                  setCrewList([...crewList, r.name]);
+                  setCrewIdsList([...crewIdsList, r.id]); // track user ID for push notifications
+                }
                 setCrewPickerOpen(false); setCrewQuery('');
               }}>
                 <View style={{ flex: 1 }}>

@@ -5,8 +5,11 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
 import os
+import re
+import time
 import logging
 import uuid
+from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Literal
 
@@ -17,6 +20,25 @@ from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, WebSock
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr
+
+
+# ---------- Logging (must be before first use) ----------
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+logger = logging.getLogger("broad")
+
+
+# ---------- Rate limiter (in-memory, per IP) ----------
+_rl_store: dict = defaultdict(list)
+
+def _rate_limit(ip: str, max_hits: int = 10, window: int = 60) -> None:
+    """Raise HTTP 429 if `ip` has exceeded `max_hits` calls in the last `window` seconds."""
+    now = time.monotonic()
+    hits = _rl_store[ip]
+    # prune old entries
+    _rl_store[ip] = [t for t in hits if now - t < window]
+    if len(_rl_store[ip]) >= max_hits:
+        raise HTTPException(status_code=429, detail="Too many requests — try again later")
+    _rl_store[ip].append(now)
 
 
 # ---------- DB ----------
@@ -128,9 +150,14 @@ class TripCreate(BaseModel):
     distance_km: float = 0
     elevation_m: int = 0
     planned_date: Optional[str] = None
-    crew: List[str] = Field(default_factory=list)  # names
+    crew: List[str] = Field(default_factory=list)       # display names
+    crew_ids: List[str] = Field(default_factory=list)   # user IDs for push notifications
     notes: Optional[str] = ""
     is_public: bool = False
+
+
+class PushTokenIn(BaseModel):
+    token: str
 
 
 class Trip(TripCreate):
@@ -206,7 +233,8 @@ def to_public(u: dict) -> UserPublic:
 
 # ---------- Auth routes ----------
 @api.post("/auth/register", response_model=AuthOut)
-async def register(body: RegisterIn):
+async def register(body: RegisterIn, request: Request):
+    _rate_limit(request.client.host if request.client else "unknown")
     email = body.email.lower().strip()
     existing = await db.users.find_one({"email": email})
     if existing:
@@ -230,7 +258,8 @@ async def register(body: RegisterIn):
 
 
 @api.post("/auth/login", response_model=AuthOut)
-async def login(body: LoginIn):
+async def login(body: LoginIn, request: Request):
+    _rate_limit(request.client.host if request.client else "unknown")
     email = body.email.lower().strip()
     user = await db.users.find_one({"email": email}, {"_id": 0})
     if not user or not verify_password(body.password, user.get("password_hash", "")):
@@ -384,6 +413,60 @@ async def convoy(trip_id: str, user: dict = Depends(get_current_user)):
     return {"members": members, "spread_km": spread_km, "updated_at": now_iso()}
 
 
+# ---------- Push token ----------
+@api.post("/users/me/push-token")
+async def save_push_token(body: PushTokenIn, user: dict = Depends(get_current_user)):
+    """Store the Expo push token for this device/user. Upsert — safe to call on every app launch."""
+    await db.users.update_one({"id": user["id"]}, {"$set": {"expo_push_token": body.token.strip()}})
+    return {"ok": True}
+
+
+# ---------- Expo push helper ----------
+async def _send_expo_push(tokens: List[str], title: str, body: str, data: dict | None = None) -> None:
+    """Best-effort push via Expo's free push API. Never raises — logs failures silently."""
+    if not tokens:
+        return
+    messages = [{"to": t, "title": title, "body": body, "data": data or {}, "sound": "default"} for t in tokens if t]
+    try:
+        async with httpx.AsyncClient(timeout=8) as c:
+            r = await c.post(
+                "https://exp.host/--/api/v2/push/send",
+                json=messages,
+                headers={"Accept": "application/json", "Accept-Encoding": "gzip, deflate", "Content-Type": "application/json"},
+            )
+            if r.status_code != 200:
+                logger.warning("Expo push failed: %s %s", r.status_code, r.text[:200])
+    except Exception as exc:
+        logger.warning("Expo push exception: %s", exc)
+
+
+async def _notify_sos_crew(sos_doc: dict, sender_name: str) -> None:
+    """Look up crew members of the active trip and send them an Expo push notification."""
+    trip_id = sos_doc.get("trip_id")
+    if not trip_id:
+        return
+    trip = await db.trips.find_one({"id": trip_id}, {"_id": 0, "crew_ids": 1})
+    if not trip:
+        return
+    crew_ids = trip.get("crew_ids") or []
+    if not crew_ids:
+        return
+    # collect push tokens for all crew members that have one
+    cursor = db.users.find(
+        {"id": {"$in": crew_ids}, "expo_push_token": {"$exists": True, "$ne": ""}},
+        {"_id": 0, "expo_push_token": 1},
+    )
+    members = await cursor.to_list(50)
+    tokens = [m["expo_push_token"] for m in members if m.get("expo_push_token")]
+    if tokens:
+        await _send_expo_push(
+            tokens,
+            title="🚨 SOS Alert",
+            body=f"{sender_name} triggered an SOS. Check the app now.",
+            data={"type": "sos", "sos_id": sos_doc["id"], "trip_id": trip_id},
+        )
+
+
 # ---------- SOS ----------
 @api.post("/sos", response_model=SOSEvent)
 async def trigger_sos(body: SOSCreate, user: dict = Depends(get_current_user)):
@@ -399,6 +482,23 @@ async def trigger_sos(body: SOSCreate, user: dict = Depends(get_current_user)):
     await db.sos_events.insert_one(doc)
     doc.pop("_id", None)
     logger.warning("SOS TRIGGERED by %s at (%s, %s)", user.get("email"), body.lat, body.lng)
+    # Notify crew in-app (WebSocket) + push (fire-and-forget — never block SOS response)
+    import asyncio
+    sender_name = user.get("name", "A rider")
+    if body.trip_id:
+        asyncio.ensure_future(hub.broadcast_sos(body.trip_id, sender_name, sid))
+    asyncio.ensure_future(_notify_sos_crew(doc, sender_name))
+    return SOSEvent(**doc)
+
+
+@api.get("/sos/active", response_model=Optional[SOSEvent])
+async def my_active_sos(user: dict = Depends(get_current_user)):
+    """Must be registered BEFORE /sos/{sos_id} to avoid 'active' being captured as an ID."""
+    doc = await db.sos_events.find_one(
+        {"user_id": user["id"], "status": "active"}, {"_id": 0}
+    )
+    if not doc:
+        return None
     return SOSEvent(**doc)
 
 
@@ -417,22 +517,12 @@ async def resolve_sos(sos_id: str, user: dict = Depends(get_current_user)):
     return SOSEvent(**doc)
 
 
-@api.get("/sos/active", response_model=Optional[SOSEvent])
-async def my_active_sos(user: dict = Depends(get_current_user)):
-    doc = await db.sos_events.find_one(
-        {"user_id": user["id"], "status": "active"}, {"_id": 0}
-    )
-    if not doc:
-        return None
-    return SOSEvent(**doc)
-
-
 @api.get("/users/search")
 async def users_search(q: str, user: dict = Depends(get_current_user)):
     """Search registered riders by name (case-insensitive). Excludes self. For crew invites."""
     if not q or len(q.strip()) < 2:
         return {"results": []}
-    pattern = {"$regex": q.strip(), "$options": "i"}
+    pattern = {"$regex": re.escape(q.strip()), "$options": "i"}
     cursor = db.users.find(
         {"name": pattern, "id": {"$ne": user["id"]}},
         {"_id": 0, "password_hash": 0, "emergency_contacts": 0},
@@ -576,6 +666,19 @@ class ConvoyHub:
         room[user_id]["updated_at"] = now_iso()
         await self.broadcast_state(trip_id)
 
+    async def broadcast_sos(self, trip_id: str, sender_name: str, sos_id: str) -> None:
+        """Push a real-time SOS alert to every connected WebSocket in the room."""
+        room = self.rooms.get(trip_id, {})
+        payload = {"type": "sos", "sender": sender_name, "sos_id": sos_id}
+        dead = []
+        for uid, r in list(room.items()):
+            try:
+                await r["ws"].send_json(payload)
+            except Exception:
+                dead.append(uid)
+        for uid in dead:
+            room.pop(uid, None)
+
     async def broadcast_state(self, trip_id: str) -> None:
         room = self.rooms.get(trip_id, {})
         members = [
@@ -634,17 +737,16 @@ async def ws_convoy(ws: WebSocket, trip_id: str, token: str = ""):
             pass
 
 
+# CORS — read allowed origins from env; wildcard + credentials is invalid per spec.
+_cors_raw = os.environ.get("CORS_ORIGINS", "http://localhost:8081,http://localhost:19006,exp://localhost:8081")
+_cors_origins = [o.strip() for o in _cors_raw.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-logger = logging.getLogger("broad")
-
 
 # ---------- Seed ----------
 async def seed():
@@ -653,7 +755,9 @@ async def seed():
     await db.trips.create_index("is_public")
 
     admin_email = os.environ.get("ADMIN_EMAIL", "rider@broad.app")
-    admin_password = os.environ.get("ADMIN_PASSWORD", "rider123")
+    admin_password = os.environ.get("ADMIN_PASSWORD")
+    if not admin_password:
+        raise RuntimeError("ADMIN_PASSWORD env var is required — set it in .env before starting the server")
     existing = await db.users.find_one({"email": admin_email})
     if not existing:
         uid = str(uuid.uuid4())

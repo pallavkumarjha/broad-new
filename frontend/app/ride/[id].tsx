@@ -148,6 +148,16 @@ export default function LiveRide() {
                 name: m.name, lat: m.lat, lng: m.lng, speed_kmh: m.speed_kmh, position: 'live', online: m.online,
                 fuel_pct: Math.round(40 + (m.name.charCodeAt(0) * 13) % 60), battery_pct: 80,
               })) }));
+            } else if (d.type === 'sos' && alive) {
+              Alert.alert(
+                '🚨 SOS Alert',
+                `${d.sender} has triggered an SOS. They may need help.`,
+                [
+                  { text: 'Dismiss', style: 'cancel' },
+                  { text: 'View SOS', onPress: () => router.push(`/sos/${d.sos_id}` as any) },
+                ],
+                { cancelable: false }
+              );
             }
           } catch {}
         };

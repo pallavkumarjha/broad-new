@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import { Platform } from 'react-native';
 import { api, storage, TOKEN_KEY, formatErr } from '../lib/api';
 
 export type User = {
@@ -21,6 +22,26 @@ type AuthState = {
 };
 
 const Ctx = createContext<AuthState | null>(null);
+
+/** Register this device's Expo push token with the backend (best-effort, never throws). */
+async function _registerPushToken(): Promise<void> {
+  if (Platform.OS === 'web') return;
+  try {
+    // Lazily import so the web bundle is never broken by this native-only module.
+    const Notifications = await import('expo-notifications');
+    const { status } = await Notifications.getPermissionsAsync();
+    let finalStatus = status;
+    if (status !== 'granted') {
+      const { status: s } = await Notifications.requestPermissionsAsync();
+      finalStatus = s;
+    }
+    if (finalStatus !== 'granted') return;
+    const tokenData = await Notifications.getExpoPushTokenAsync();
+    await api.post('/users/me/push-token', { token: tokenData.data });
+  } catch {
+    // Silently swallow — push is opt-in, never block auth flow
+  }
+}
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -47,6 +68,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const { data } = await api.post('/auth/login', { email, password });
       await storage.setItem(TOKEN_KEY, data.token);
       setUser(data.user);
+      _registerPushToken(); // fire-and-forget
     } catch (e: any) {
       throw new Error(formatErr(e?.response?.data?.detail) || e?.message || 'Login failed');
     }
@@ -57,6 +79,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const { data } = await api.post('/auth/register', { email, password, name });
       await storage.setItem(TOKEN_KEY, data.token);
       setUser(data.user);
+      _registerPushToken(); // fire-and-forget
     } catch (e: any) {
       throw new Error(formatErr(e?.response?.data?.detail) || e?.message || 'Sign up failed');
     }

@@ -79,7 +79,20 @@ agenthub/agents/youtube/db
 memory/test_credentials.md
 
 # Mobile development
-android-sdk/-e 
+android-sdk/
+
+# Expo / React Native generated native dirs
+frontend/android/
+frontend/ios/
+frontend/yarn.lock
+
+# Metro bundler cache
+frontend/.metro-cache/
+.metro-cache/
+
+# Claude internal files
+.claude/worktrees/
+
 # Environment and credential files
 .env
 .env.*
