@@ -5,7 +5,7 @@ import { useRouter, Link } from 'expo-router';
 import { useAuth } from '../../src/contexts/AuthContext';
 import { colors, type, space, radius } from '../../src/theme/tokens';
 import { Eyebrow, Button, Rule, ErrorStrip } from '../../src/components/ui';
-import { DawnIllus } from '../../src/components/illustrations';
+import { HelmetIllus } from '../../src/components/illustrations';
 
 export default function Login() {
   const { signIn } = useAuth();
@@ -32,7 +32,7 @@ export default function Login() {
     <SafeAreaView style={styles.container} testID="login-screen">
       {/* Illustration sits above the keyboard-avoiding zone so it scrolls away naturally */}
       <View style={styles.illusWrap}>
-        <DawnIllus width={width} height={200} />
+        <HelmetIllus width={width} height={220} />
       </View>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">

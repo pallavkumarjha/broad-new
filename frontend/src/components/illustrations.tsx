@@ -333,3 +333,134 @@ export function TripIllus({ trip, width, height }: { trip: any; width?: number; 
   if (kind === 'coast') return <CoastIllus width={width} height={height} />;
   return <RoadIllus width={width} height={height} />;
 }
+
+// ──────────────────────────────────────────────────────────────────────────
+// HelmetIllus — the Broad brand mark. Full-face helmet in side profile,
+// facing right. Matte black body, orange concentric vent accent, white
+// pinstripe trim, tinted visor. Designed to match the paper/ink aesthetic
+// of the other illustrations so it reads as part of the same system.
+// ──────────────────────────────────────────────────────────────────────────
+export function HelmetIllus({
+  width = 220,
+  height = 220,
+  showPaper = true,
+  dark = false,
+}: Props & { showPaper?: boolean }) {
+  const amber = colors.light.amber;
+  const body = '#1C1C1C';       // matte black shell
+  const visor = '#2E2E34';      // tinted visor
+  const trim = '#FFFFFF';       // pinstripe
+  const bg = dark ? '#141414' : '#EFECE5';
+  // Tight square viewBox — helmet fills ~90% for strong presence.
+  const VB = 200;
+  return (
+    <View style={[styles.wrap, { width, height, backgroundColor: bg }]}>
+      <Svg width={width} height={height} viewBox={`0 0 ${VB} ${VB}`} preserveAspectRatio="xMidYMid meet">
+        {showPaper && (
+          <>
+            {/* Subtle paper hatching just like the other illustrations */}
+            <Defs>
+              <Pattern id="helmet-hatch" width={8} height={8} patternUnits="userSpaceOnUse">
+                <Line x1={0} y1={8} x2={8} y2={0} stroke={dark ? '#1f1f1f' : '#E0DCD2'} strokeWidth={0.5} />
+              </Pattern>
+            </Defs>
+            <Rect x={0} y={0} width={VB} height={VB} fill={bg} />
+            <Rect x={0} y={0} width={VB} height={VB} fill="url(#helmet-hatch)" opacity={0.4} />
+          </>
+        )}
+
+        {/* Helmet shell — full-face profile facing right. The path sketches:
+            crown over to the back, down the rear with a small intake notch,
+            around the jaw/chin bar, up the chin, across the visor mouth line,
+            and over the brow back to the crown. */}
+        <Path
+          d="
+            M 55 78
+            Q 55 38 100 32
+            Q 155 32 165 78
+            L 165 118
+            Q 165 138 150 150
+            L 140 160
+            Q 130 168 112 168
+            L 70 168
+            Q 56 168 52 154
+            Q 48 140 50 120
+            L 42 116
+            L 50 108
+            Z
+          "
+          fill={body}
+          stroke={body}
+          strokeWidth={1}
+          strokeLinejoin="round"
+        />
+
+        {/* Back-top intake notch — small triangular cutout signature detail */}
+        <Path
+          d="M 62 62 L 55 72 L 68 70 Z"
+          fill={bg}
+        />
+
+        {/* Visor opening — dark tinted glass on the right/front */}
+        <Path
+          d="
+            M 104 66
+            Q 160 68 162 98
+            L 162 112
+            Q 160 122 150 124
+            L 108 124
+            Q 100 124 100 116
+            L 100 74
+            Q 100 66 104 66
+            Z
+          "
+          fill={visor}
+        />
+
+        {/* Visor top reflection hint — very subtle */}
+        <Path
+          d="M 112 74 Q 148 74 156 92"
+          fill="none"
+          stroke="#3A3A42"
+          strokeWidth={1}
+          strokeLinecap="round"
+        />
+
+        {/* White pinstripe — runs along the lower edge of the shell */}
+        <Path
+          d="
+            M 50 130
+            Q 56 156 72 162
+            L 138 162
+            Q 152 158 160 142
+          "
+          fill="none"
+          stroke={trim}
+          strokeWidth={1.2}
+          strokeLinecap="round"
+        />
+
+        {/* White pinstripe — runs along the top edge of the visor */}
+        <Path
+          d="M 104 64 Q 138 64 160 94"
+          fill="none"
+          stroke={trim}
+          strokeWidth={1}
+          strokeLinecap="round"
+        />
+
+        {/* Orange vent — concentric circles over a filled amber disc. This is
+            the signature accent of the mark, sitting just ahead of the crown
+            on the side of the shell. */}
+        <Circle cx={96} cy={82} r={20} fill={amber} />
+        <Circle cx={96} cy={82} r={20} fill="none" stroke={trim} strokeWidth={0.6} />
+        <Circle cx={96} cy={82} r={12} fill="#B35A1C" />
+        <Circle cx={96} cy={82} r={12} fill="none" stroke={trim} strokeWidth={0.5} />
+        <Circle cx={96} cy={82} r={5} fill="#7A3A10" />
+        <Circle cx={96} cy={82} r={5} fill="none" stroke={trim} strokeWidth={0.4} />
+        {/* tiny swirl tail — echoes the reference without going fussy */}
+        <Path d="M 78 84 Q 84 92 92 88" fill="none" stroke={amber} strokeWidth={1.2} strokeLinecap="round" />
+      </Svg>
+    </View>
+  );
+}

@@ -4,11 +4,24 @@
     "appVersionSource": "local"
   },
   "build": {
+    "development": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleRelease"
+      },
+      "env": {
+        "APP_ENV": "development"
+      }
+    },
     "preview": {
       "distribution": "internal",
       "android": {
         "buildType": "apk",
         "gradleCommand": ":app:assembleRelease"
+      },
+      "env": {
+        "APP_ENV": "production"
       }
     },
     "production": {
@@ -17,6 +30,9 @@
       },
       "ios": {
         "autoIncrement": true
+      },
+      "env": {
+        "APP_ENV": "production"
       }
     }
   },

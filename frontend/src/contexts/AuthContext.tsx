@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { Platform } from 'react-native';
-import { api, storage, TOKEN_KEY, REFRESH_TOKEN_KEY, formatErr } from '../lib/api';
+import { api, storage, TOKEN_KEY, REFRESH_TOKEN_KEY, describeError } from '../lib/api';
 
 export type User = {
   id: string;
@@ -72,7 +72,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(data.user);
       _registerPushToken(); // fire-and-forget
     } catch (e: any) {
-      throw new Error(formatErr(e?.response?.data?.detail) || e?.message || 'Login failed');
+      throw new Error(describeError(e, 'Login failed'));
     }
   };
 
@@ -84,7 +84,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(data.user);
       _registerPushToken(); // fire-and-forget
     } catch (e: any) {
-      throw new Error(formatErr(e?.response?.data?.detail) || e?.message || 'Sign up failed');
+      throw new Error(describeError(e, 'Sign up failed'));
     }
   };
 

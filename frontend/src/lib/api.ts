@@ -106,11 +106,24 @@ api.interceptors.response.use(
 );
 
 export function formatErr(detail: any): string {
-  if (detail == null) return 'Something went wrong.';
+  if (detail == null) return '';
   if (typeof detail === 'string') return detail;
   if (Array.isArray(detail)) {
     return detail.map((e: any) => (e && typeof e.msg === 'string' ? e.msg : JSON.stringify(e))).join(' ');
   }
   if (detail && typeof detail.msg === 'string') return detail.msg;
   return String(detail);
+}
+
+/** Full-shape axios error → human-readable string. Uses server detail first,
+ *  then falls through to network/timeout info so users and logs can tell a
+ *  timeout apart from a 401 apart from a DNS miss. */
+export function describeError(e: any, fallback = 'Something went wrong.'): string {
+  const detail = e?.response?.data?.detail;
+  const formatted = formatErr(detail);
+  if (formatted) return formatted;
+  // No structured response — it's a network/timeout/non-JSON error.
+  if (e?.code === 'ECONNABORTED') return 'Request timed out. Check your connection and try again.';
+  if (e?.message && typeof e.message === 'string') return e.message;
+  return fallback;
 }
