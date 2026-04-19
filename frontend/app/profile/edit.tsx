@@ -5,6 +5,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import { useAuth } from '../../src/contexts/AuthContext';
 import { api } from '../../src/lib/api';
+import { queryClient } from '../../src/lib/queryClient';
 import { colors, type, space, radius } from '../../src/theme/tokens';
 import { Eyebrow, Rule, Button, Card, Meta } from '../../src/components/ui';
 
@@ -44,6 +45,9 @@ export default function ProfileEdit() {
         emergency_contacts: cleanContacts,
       });
       await refresh();
+      // User profile changed — invalidate /auth/me cache used by Discover's
+      // home_city filter and anything else that reads the me query.
+      queryClient.invalidateQueries({ queryKey: ['auth', 'me'] });
       if (isOnboarding) router.replace('/(tabs)');
       else router.back();
     } catch (e: any) {

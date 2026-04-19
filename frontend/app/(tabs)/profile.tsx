@@ -5,6 +5,7 @@ import { useRouter, useFocusEffect } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import { useAuth } from '../../src/contexts/AuthContext';
 import { api } from '../../src/lib/api';
+import { queryClient } from '../../src/lib/queryClient';
 import { colors, type, space } from '../../src/theme/tokens';
 import { Eyebrow, Rule, SpecRow, Card, Meta, Button } from '../../src/components/ui';
 
@@ -33,6 +34,9 @@ export default function Profile() {
     try {
       await api.patch('/users/me', { home_city: city });
       await refresh(); // pull fresh /auth/me so user.home_city updates in-context
+      // Home city drives the Discover filter — invalidate both caches.
+      queryClient.invalidateQueries({ queryKey: ['auth', 'me'] });
+      queryClient.invalidateQueries({ queryKey: ['trips', 'discover'] });
     } catch (e: any) {
       Alert.alert('Could not save home city', e?.response?.data?.detail || e?.message || 'Please try again.');
     } finally { setSaving(false); setCityPickerOpen(false); }

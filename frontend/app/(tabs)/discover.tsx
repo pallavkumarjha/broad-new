@@ -1,62 +1,86 @@
-import React, { useCallback, useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, useWindowDimensions, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter, useFocusEffect } from 'expo-router';
+import { useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../src/lib/api';
 import { colors, type, space, radius } from '../../src/theme/tokens';
 import { Eyebrow, Rule, Meta } from '../../src/components/ui';
 import { TripIllus, EmptyRoadIllus } from '../../src/components/illustrations';
+import { SkeletonTripCard } from '../../src/components/Skeleton';
 
 export default function Discover() {
   const router = useRouter();
   const { width } = useWindowDimensions();
-  const [rides, setRides] = useState<any[]>([]);
-  const [refreshing, setRefreshing] = useState(false);
-  const [joining, setJoining] = useState<string | null>(null);
-  // Map of trip_id -> latest request status so the card can render the right CTA
-  const [requestState, setRequestState] = useState<Record<string, 'pending' | 'approved' | 'declined' | 'cancelled'>>({});
+  const qc = useQueryClient();
   const [showAll, setShowAll] = useState(false);
-  const [userHomeCity, setUserHomeCity] = useState<string | null>(null);
 
-  const load = useCallback(async (showAllParam: boolean = false) => {
-    try {
-      const [discoverRes, mineRes, meRes] = await Promise.all([
-        api.get('/trips/discover', { params: { show_all: showAllParam } }),
-        api.get('/users/me/trip-requests').catch(() => ({ data: [] })),
-        api.get('/auth/me').catch(() => ({ data: {} })),
+  // Three queries, all cached independently. showAll is part of the queryKey
+  // so toggling it shows cached results if we've already seen that variant.
+  const ridesQuery = useQuery<any[]>({
+    queryKey: ['trips', 'discover', { showAll }],
+    queryFn: async () => (await api.get('/trips/discover', { params: { show_all: showAll } })).data,
+    placeholderData: (prev) => prev,
+  });
+  const myReqsQuery = useQuery<any[]>({
+    queryKey: ['users', 'me', 'trip-requests'],
+    queryFn: async () => (await api.get('/users/me/trip-requests')).data,
+    // Soft-fail: on error we treat it as empty rather than block the screen
+  });
+  const meQuery = useQuery<any>({
+    queryKey: ['auth', 'me'],
+    queryFn: async () => (await api.get('/auth/me')).data,
+    staleTime: 5 * 60_000, // /auth/me barely changes; 5min is plenty
+  });
+
+  const rides = ridesQuery.data ?? [];
+  const userHomeCity: string | null = meQuery.data?.home_city || null;
+  const isInitialLoading = ridesQuery.isLoading && !ridesQuery.data;
+
+  // Latest request per trip wins (list comes back newest-first)
+  const requestState = useMemo<Record<string, 'pending' | 'approved' | 'declined' | 'cancelled'>>(() => {
+    const map: Record<string, any> = {};
+    for (const r of myReqsQuery.data || []) {
+      if (!map[r.trip_id]) map[r.trip_id] = r.status;
+    }
+    return map;
+  }, [myReqsQuery.data]);
+
+  const onRefresh = async () => {
+    // Refetch all three in parallel so pull-to-refresh feels snappy.
+    await Promise.all([ridesQuery.refetch(), myReqsQuery.refetch(), meQuery.refetch()]);
+  };
+
+  const onToggleShowAll = (toggle: boolean) => setShowAll(toggle);
+
+  // Optimistic "request to join": flip the CTA to PENDING the instant the
+  // user taps, then rollback if the server rejects. This is the single biggest
+  // perceived-latency improvement — the previous flow had the user staring at
+  // a spinning "SENDING…" button for 800ms+ each tap.
+  const joinMutation = useMutation<any, any, { tripId: string }, { prev: any[] | undefined }>({
+    mutationFn: async ({ tripId }) => (await api.post(`/trips/${tripId}/request-join`, { note: '' })).data,
+    onMutate: async ({ tripId }) => {
+      await qc.cancelQueries({ queryKey: ['users', 'me', 'trip-requests'] });
+      const prev = qc.getQueryData<any[]>(['users', 'me', 'trip-requests']);
+      // Prepend an in-flight request record so the requestState memo picks it
+      // up as "pending" without waiting for the network.
+      qc.setQueryData<any[]>(['users', 'me', 'trip-requests'], (old) => [
+        { trip_id: tripId, status: 'pending', _optimistic: true },
+        ...(old || []),
       ]);
-      setRides(discoverRes.data);
-      setUserHomeCity(meRes.data?.home_city || null);
-      // Latest request per trip wins (list comes back newest-first)
-      const map: Record<string, any> = {};
-      for (const r of mineRes.data || []) {
-        if (!map[r.trip_id]) map[r.trip_id] = r.status;
-      }
-      setRequestState(map);
-    } catch {}
-  }, []);
-
-  useFocusEffect(useCallback(() => { load(showAll); }, [load, showAll]));
-
-  const onRefresh = async () => { setRefreshing(true); await load(showAll); setRefreshing(false); };
-
-  const onToggleShowAll = async (toggle: boolean) => {
-    setShowAll(toggle);
-    setRefreshing(true);
-    await load(toggle);
-    setRefreshing(false);
-  };
-
-  const requestJoin = async (trip: any) => {
-    setJoining(trip.id);
-    try {
-      await api.post(`/trips/${trip.id}/request-join`, { note: '' });
-      setRequestState(s => ({ ...s, [trip.id]: 'pending' }));
-    } catch (e: any) {
-      Alert.alert('Could not send request', e?.response?.data?.detail || e?.message || 'Please try again.');
-    } finally { setJoining(null); }
-  };
+      return { prev };
+    },
+    onError: (err, _vars, ctx) => {
+      if (ctx) qc.setQueryData(['users', 'me', 'trip-requests'], ctx.prev);
+      Alert.alert('Could not send request', err?.response?.data?.detail || err?.message || 'Please try again.');
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ['users', 'me', 'trip-requests'] });
+    },
+  });
+  const joining = joinMutation.isPending ? joinMutation.variables?.tripId : null;
+  const requestJoin = (trip: any) => joinMutation.mutate({ tripId: trip.id });
 
   return (
     <SafeAreaView style={styles.container} edges={['top']} testID="discover-screen">
@@ -85,8 +109,13 @@ export default function Discover() {
           <Meta style={{ marginLeft: space.sm, color: colors.light.inkMuted, fontSize: 10 }}>ALL</Meta>
         </View>
       )}
-      <ScrollView contentContainerStyle={{ paddingBottom: space.xxl }} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
-        {rides.length === 0 ? (
+      <ScrollView contentContainerStyle={{ paddingBottom: space.xxl }} refreshControl={<RefreshControl refreshing={ridesQuery.isRefetching && !isInitialLoading} onRefresh={onRefresh} />}>
+        {isInitialLoading ? (
+          <View>
+            <SkeletonTripCard testID="discover-skel-1" />
+            <SkeletonTripCard testID="discover-skel-2" />
+          </View>
+        ) : rides.length === 0 ? (
           <View style={styles.empty}>
             <EmptyRoadIllus width={width - space.lg * 2} height={150} />
             <Text style={[type.body, { color: colors.light.inkMuted, textAlign: 'center', marginTop: space.lg }]}>

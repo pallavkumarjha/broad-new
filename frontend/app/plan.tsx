@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import { api } from '../src/lib/api';
+import { queryClient } from '../src/lib/queryClient';
 import { colors, type, space, radius } from '../src/theme/tokens';
 import { Eyebrow, Button, Rule, Meta, ErrorStrip } from '../src/components/ui';
 import { MapView } from '../src/components/MapView';
@@ -159,6 +160,9 @@ export default function Plan() {
         description: isPublic ? description.trim() : '',
         city: isPublic ? (start?.name?.split(',')[0]?.trim() || '') : '',
       });
+      // New trip just landed — invalidate list caches so Home/Trips show it.
+      queryClient.invalidateQueries({ queryKey: ['trips', 'mine'] });
+      queryClient.invalidateQueries({ queryKey: ['trips', 'discover'] });
       router.replace(`/trip/${data.id}`);
     } catch (e: any) {
       setErr(e?.response?.data?.detail || e.message || 'Could not save trip');

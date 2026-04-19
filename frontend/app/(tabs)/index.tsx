@@ -1,14 +1,16 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, useWindowDimensions, Animated } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter, useFocusEffect } from 'expo-router';
+import { useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
+import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../../src/contexts/AuthContext';
 import { api } from '../../src/lib/api';
 import { colors, type, space, radius, fonts } from '../../src/theme/tokens';
 import { Eyebrow, Card, Rule, Meta } from '../../src/components/ui';
 import { FIELD_NOTES, pickFromSeed } from '../../src/lib/content';
 import { EmptyRoadIllus } from '../../src/components/illustrations';
+import { SkeletonTripRow, SkeletonBlock } from '../../src/components/Skeleton';
 
 type Trip = any;
 
@@ -16,23 +18,22 @@ export default function Home() {
   const { user } = useAuth();
   const router = useRouter();
   const { width } = useWindowDimensions();
-  const [trips, setTrips] = useState<Trip[]>([]);
-  const [active, setActive] = useState<Trip | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
 
-  const load = useCallback(async () => {
-    try {
-      const { data } = await api.get('/trips');
-      setTrips(data);
-      setActive(data.find((t: Trip) => t.status === 'active') || null);
-    } catch {}
-  }, []);
+  // All trips, cached for 30s by the global QueryClient. Discover + Trips
+  // keyed off different endpoints so we don't step on each other.
+  const tripsQuery = useQuery<Trip[]>({
+    queryKey: ['trips', 'mine'],
+    queryFn: async () => (await api.get('/trips')).data,
+    // On the very first render of a signed-in session this returns [] so the
+    // skeleton shows instead of an empty state flash.
+    placeholderData: (prev) => prev,
+  });
 
-  useFocusEffect(useCallback(() => { load(); }, [load]));
+  const trips = tripsQuery.data ?? [];
+  const active = trips.find((t) => t.status === 'active') || null;
+  const isInitialLoading = tripsQuery.isLoading && !tripsQuery.data;
 
-  const onRefresh = async () => {
-    setRefreshing(true); await load(); setRefreshing(false);
-  };
+  const onRefresh = async () => { await tripsQuery.refetch(); };
 
   const greet = () => {
     const h = new Date().getHours();
@@ -59,7 +60,7 @@ export default function Home() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']} testID="home-screen">
-      <ScrollView contentContainerStyle={{ paddingBottom: space.xxl }} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.light.ink} />}>
+      <ScrollView contentContainerStyle={{ paddingBottom: space.xxl }} refreshControl={<RefreshControl refreshing={tripsQuery.isRefetching && !isInitialLoading} onRefresh={onRefresh} tintColor={colors.light.ink} />}>
         <View style={styles.header}>
           <Eyebrow>TODAY — {greet().toUpperCase()} · {new Date().toDateString().toUpperCase()}</Eyebrow>
           <Text style={[type.h1, { color: colors.light.ink, marginTop: space.xs }]}>{user?.name || 'Rider'}.</Text>
@@ -102,7 +103,12 @@ export default function Home() {
             <TouchableOpacity onPress={() => router.push('/(tabs)/trips')}><Meta>VIEW ALL →</Meta></TouchableOpacity>
           </View>
           <Rule style={{ marginTop: space.sm }} />
-          {upcoming.length === 0 ? (
+          {isInitialLoading ? (
+            <View>
+              <SkeletonTripRow testID="home-skel-row-1" />
+              <SkeletonTripRow testID="home-skel-row-2" />
+            </View>
+          ) : upcoming.length === 0 ? (
             <View style={styles.emptyUpcoming}>
               <EmptyRoadIllus width={width - space.lg * 2} height={130} />
               <Text style={[type.body, { color: colors.light.inkMuted, marginTop: space.md }]}>

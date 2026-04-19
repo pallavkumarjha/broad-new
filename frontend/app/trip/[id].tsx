@@ -5,6 +5,17 @@ import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import { useAuth } from '../../src/contexts/AuthContext';
 import { api } from '../../src/lib/api';
+import { queryClient } from '../../src/lib/queryClient';
+
+// After writes that touch the user's trip list or their request state, nudge
+// the shared React Query cache so Home/Trips/Discover show fresh data as soon
+// as the user navigates back. Using invalidate instead of refetch — any screen
+// currently observing the key will refetch on-demand.
+const invalidateTripCaches = () => {
+  queryClient.invalidateQueries({ queryKey: ['trips', 'mine'] });
+  queryClient.invalidateQueries({ queryKey: ['trips', 'discover'] });
+  queryClient.invalidateQueries({ queryKey: ['users', 'me', 'trip-requests'] });
+};
 import { colors, type, space, radius } from '../../src/theme/tokens';
 import { Eyebrow, Rule, SpecRow, Button, Meta, Card } from '../../src/components/ui';
 import { MapView } from '../../src/components/MapView';
@@ -73,6 +84,7 @@ export default function TripDetail() {
     setBusy(true);
     try {
       await api.patch(`/trips/${id}`, { status: 'active' });
+      invalidateTripCaches();
       router.replace(`/ride/${id}`);
     } catch (e: any) { Alert.alert('Could not start', e?.message || ''); }
     finally { setBusy(false); }
@@ -82,7 +94,7 @@ export default function TripDetail() {
     Alert.alert('Delete trip?', 'This cannot be undone.', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Delete', style: 'destructive', onPress: async () => {
-        try { await api.delete(`/trips/${id}`); router.back(); } catch {}
+        try { await api.delete(`/trips/${id}`); invalidateTripCaches(); router.back(); } catch {}
       }},
     ]);
   };
@@ -92,6 +104,7 @@ export default function TripDetail() {
     try {
       const { data } = await api.post(`/trips/${id}/request-join`, { note: '' });
       setMyRequest(data);
+      invalidateTripCaches();
     } catch (e: any) {
       Alert.alert('Could not send request', e?.response?.data?.detail || e?.message || '');
     } finally { setBusy(false); }
@@ -106,6 +119,7 @@ export default function TripDetail() {
         try {
           const { data } = await api.post(`/trips/${id}/requests/${myRequest.id}/cancel`);
           setMyRequest(data);
+          invalidateTripCaches();
         } catch (e: any) {
           Alert.alert('Could not withdraw', e?.response?.data?.detail || e?.message || '');
         } finally { setBusy(false); }
@@ -120,6 +134,7 @@ export default function TripDetail() {
         setBusy(true);
         try {
           await api.post(`/trips/${id}/leave`);
+          invalidateTripCaches();
           router.back();
         } catch (e: any) {
           Alert.alert('Could not leave', e?.response?.data?.detail || e?.message || '');
@@ -133,6 +148,7 @@ export default function TripDetail() {
     try {
       await api.post(`/trips/${id}/requests/${rid}/approve`);
       await load();
+      invalidateTripCaches();
     } catch (e: any) {
       Alert.alert('Could not approve', e?.response?.data?.detail || e?.message || '');
     } finally { setActing(null); }
@@ -143,6 +159,7 @@ export default function TripDetail() {
     try {
       await api.post(`/trips/${id}/requests/${rid}/decline`);
       await load();
+      invalidateTripCaches();
     } catch (e: any) {
       Alert.alert('Could not decline', e?.response?.data?.detail || e?.message || '');
     } finally { setActing(null); }
@@ -152,7 +169,7 @@ export default function TripDetail() {
     Alert.alert(`Remove ${name || 'this rider'}?`, 'They will be notified.', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Remove', style: 'destructive', onPress: async () => {
-        try { await api.post(`/trips/${id}/riders/${uid}/remove`); await load(); }
+        try { await api.post(`/trips/${id}/riders/${uid}/remove`); await load(); invalidateTripCaches(); }
         catch (e: any) { Alert.alert('Could not remove', e?.response?.data?.detail || e?.message || ''); }
       }},
     ]);

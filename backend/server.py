@@ -18,6 +18,7 @@ import jwt as pyjwt
 import httpx
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, WebSocket, WebSocketDisconnect
 from starlette.middleware.cors import CORSMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo.errors import DuplicateKeyError
 from pydantic import BaseModel, Field, EmailStr
@@ -1132,6 +1133,13 @@ async def ws_convoy(ws: WebSocket, trip_id: str, token: str = ""):
             pass
 
 
+# gzip — compress JSON list responses (trips, requests, /auth/me).
+# minimum_size=500: don't spend CPU compressing tiny payloads (single-object
+# responses, 401s, ping). The big wins are /trips and /trips/discover which
+# commonly exceed 5-20KB and compress 70-85%. Runs *before* CORS middleware
+# in the stack (added second = executes first on egress in Starlette).
+app.add_middleware(GZipMiddleware, minimum_size=500)
+
 # CORS — read allowed origins from env; wildcard + credentials is invalid per spec.
 _cors_raw = os.environ.get("CORS_ORIGINS", "http://localhost:8081,http://localhost:19006,exp://localhost:8081")
 _cors_origins = [o.strip() for o in _cors_raw.split(",") if o.strip()]
@@ -1145,12 +1153,28 @@ app.add_middleware(
 
 # ---------- Seed ----------
 async def seed():
+    # ---- Index audit (2026-04) ----
+    # Every authenticated request hits users.find_one({"id": ...}) via
+    # get_current_user, and every trip detail/mutation hits
+    # trips.find_one({"id": ...}). Without explicit id indexes these were
+    # COLLSCANs — fine at tens of users, multiplies linearly into the
+    # request critical path as the collection grows. Adding unique id
+    # indexes makes single-doc lookups O(log N) and typically saves
+    # 50-300ms per authenticated call at scale.
     await db.users.create_index("email", unique=True)
+    await db.users.create_index("id", unique=True)  # <- hot path: every auth call
+    await db.trips.create_index("id", unique=True)  # <- hot path: every detail/mutation
     await db.trips.create_index("user_id")
+    # Compound index for the "my trips, newest first" list query. Covers both
+    # the filter and the sort, letting Mongo skip an in-memory sort step.
+    await db.trips.create_index([("user_id", 1), ("created_at", -1)])
     await db.trips.create_index("is_public")
     await db.trips.create_index("city")
+    # Discover screen: find(is_public=True, [city=X]).sort(created_at, -1)
+    await db.trips.create_index([("is_public", 1), ("city", 1), ("created_at", -1)])
     await db.refresh_tokens.create_index("jti", unique=True)
     await db.refresh_tokens.create_index("user_id")
+    await db.trip_requests.create_index("id", unique=True)  # <- approve/decline/cancel lookups
     await db.trip_requests.create_index([("trip_id", 1), ("status", 1)])
     await db.trip_requests.create_index([("requested_by", 1), ("status", 1)])
     # one pending request per (trip, user) — approved/declined/cancelled allowed to repeat history
@@ -1160,6 +1184,9 @@ async def seed():
         unique=True,
         partialFilterExpression={"status": "pending"},
     )
+    # SOS is low-volume but /sos/active fires on every ride screen mount
+    await db.sos_events.create_index("id", unique=True)
+    await db.sos_events.create_index([("user_id", 1), ("status", 1)])
 
     admin_email = os.environ.get("ADMIN_EMAIL", "rider@broad.app")
     admin_password = os.environ.get("ADMIN_PASSWORD")

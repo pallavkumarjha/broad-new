@@ -8,6 +8,8 @@ import { StatusBar } from 'expo-status-bar';
 import { AuthProvider } from '../src/contexts/AuthContext';
 import { SettingsProvider } from '../src/contexts/SettingsContext';
 import { colors } from '../src/theme/tokens';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { queryClient } from '../src/lib/queryClient';
 
 export default function RootLayout() {
   const [f1] = useFraunces({ Fraunces_400Regular, Fraunces_500Medium, Fraunces_600SemiBold, Fraunces_700Bold });
@@ -28,6 +30,7 @@ export default function RootLayout() {
   }
 
   return (
+    <QueryClientProvider client={queryClient}>
     <SafeAreaProvider>
       <AuthProvider>
         <SettingsProvider>
@@ -52,5 +55,6 @@ export default function RootLayout() {
         </SettingsProvider>
       </AuthProvider>
     </SafeAreaProvider>
+    </QueryClientProvider>
   );
 }

@@ -1,12 +1,14 @@
-import React, { useCallback, useState } from 'react';
+import React, { useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, useWindowDimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter, useFocusEffect } from 'expo-router';
+import { useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
+import { useQuery } from '@tanstack/react-query';
 import { api } from '../../src/lib/api';
 import { colors, type, space } from '../../src/theme/tokens';
 import { Eyebrow, Rule, Meta } from '../../src/components/ui';
 import { EmptyRoadIllus } from '../../src/components/illustrations';
+import { SkeletonTripRow } from '../../src/components/Skeleton';
 
 const TABS: { key: string; label: string }[] = [
   { key: 'active', label: 'ACTIVE' },
@@ -17,25 +19,26 @@ const TABS: { key: string; label: string }[] = [
 export default function Trips() {
   const router = useRouter();
   const { width } = useWindowDimensions();
-  const [trips, setTrips] = useState<any[]>([]);
-  const [pendingRequests, setPendingRequests] = useState<any[]>([]);
   const [tab, setTab] = useState<'active' | 'planned' | 'completed'>('planned');
-  const [refreshing, setRefreshing] = useState(false);
 
-  const load = useCallback(async () => {
-    try {
-      const [tripsRes, reqRes] = await Promise.all([
-        api.get('/trips'),
-        api.get('/users/me/trip-requests').catch(() => ({ data: [] })),
-      ]);
-      setTrips(tripsRes.data);
-      setPendingRequests((reqRes.data || []).filter((r: any) => r.status === 'pending'));
-    } catch {}
-  }, []);
+  // Shared cache key with Home — one fetch powers both screens.
+  const tripsQuery = useQuery<any[]>({
+    queryKey: ['trips', 'mine'],
+    queryFn: async () => (await api.get('/trips')).data,
+    placeholderData: (prev) => prev,
+  });
+  const myReqsQuery = useQuery<any[]>({
+    queryKey: ['users', 'me', 'trip-requests'],
+    queryFn: async () => (await api.get('/users/me/trip-requests')).data,
+  });
 
-  useFocusEffect(useCallback(() => { load(); }, [load]));
+  const trips = tripsQuery.data ?? [];
+  const pendingRequests = (myReqsQuery.data || []).filter((r: any) => r.status === 'pending');
+  const isInitialLoading = tripsQuery.isLoading && !tripsQuery.data;
 
-  const onRefresh = async () => { setRefreshing(true); await load(); setRefreshing(false); };
+  const onRefresh = async () => {
+    await Promise.all([tripsQuery.refetch(), myReqsQuery.refetch()]);
+  };
   const filtered = trips.filter(t => t.status === tab);
   // Map trip_id -> bool for quick lookup in the row
   const pendingByTrip = React.useMemo(() => {
@@ -82,8 +85,14 @@ export default function Trips() {
       </View>
       <Rule />
 
-      <ScrollView contentContainerStyle={{ paddingBottom: space.xxl }} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
-        {filtered.length === 0 ? (
+      <ScrollView contentContainerStyle={{ paddingBottom: space.xxl }} refreshControl={<RefreshControl refreshing={tripsQuery.isRefetching && !isInitialLoading} onRefresh={onRefresh} />}>
+        {isInitialLoading ? (
+          <View>
+            <SkeletonTripRow testID="trips-skel-1" />
+            <SkeletonTripRow testID="trips-skel-2" />
+            <SkeletonTripRow testID="trips-skel-3" />
+          </View>
+        ) : filtered.length === 0 ? (
           <View style={styles.empty}>
             <EmptyRoadIllus width={width - space.lg * 2} height={150} />
             <Text style={[type.body, { color: colors.light.inkMuted, textAlign: 'center', marginTop: space.lg }]}>
