@@ -460,7 +460,10 @@ async def list_trips(
     status: Optional[str] = None,
     user: dict = Depends(get_current_user),
 ):
-    query = {"$or": [{"user_id": user["id"]}, {"crew_members": user["id"]}]}
+    # A user's trip list includes trips they organised AND trips they're confirmed crew on.
+    # The crew field is `crew_ids` (multikey); NOT `crew_members` — that field never existed
+    # and was silently hiding approved-rider trips from the Trips tab.
+    query = {"$or": [{"user_id": user["id"]}, {"crew_ids": user["id"]}]}
     if status:
         query["status"] = status
     cursor = db.trips.find(query, {"_id": 0}).sort("created_at", -1)
@@ -506,15 +509,13 @@ async def update_trip(trip_id: str, body: TripUpdate, user: dict = Depends(get_c
         update["started_at"] = now_iso()
     if body.status == "completed":
         update["ended_at"] = now_iso()
-        # update user stats
-        await db.users.update_one(
-            {"id": user["id"]},
-            {
-                "$inc": {
-                    "stats.total_km": body.actual_distance_km or doc.get("distance_km", 0),
-                    "stats.trips_completed": 1,
-                }
-            },
+        # Credit every rider who was on the trip — organiser + all confirmed crew —
+        # not just the organiser who tapped Complete. They rode the same kilometres.
+        km = body.actual_distance_km or doc.get("distance_km", 0)
+        rider_ids = list({doc["user_id"], *(doc.get("crew_ids") or [])})
+        await db.users.update_many(
+            {"id": {"$in": rider_ids}},
+            {"$inc": {"stats.total_km": km, "stats.trips_completed": 1}},
         )
     await db.trips.update_one({"id": trip_id}, {"$set": update})
     fresh = await db.trips.find_one({"id": trip_id}, {"_id": 0})
@@ -1172,6 +1173,10 @@ async def seed():
     await db.trips.create_index("city")
     # Discover screen: find(is_public=True, [city=X]).sort(created_at, -1)
     await db.trips.create_index([("is_public", 1), ("city", 1), ("created_at", -1)])
+    # Trips list uses $or: [{user_id}, {crew_ids}]. Each $or branch is evaluated
+    # separately, so crew_ids (a multikey array) needs its own index or it's a COLLSCAN
+    # on the crew side every time a rider opens the Trips tab.
+    await db.trips.create_index([("crew_ids", 1), ("created_at", -1)])
     await db.refresh_tokens.create_index("jti", unique=True)
     await db.refresh_tokens.create_index("user_id")
     await db.trip_requests.create_index("id", unique=True)  # <- approve/decline/cancel lookups
