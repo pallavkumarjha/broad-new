@@ -3,11 +3,14 @@ import { storage } from '../lib/api';
 
 const KEY = 'broad_settings_v1';
 
+export type Units = 'metric' | 'imperial';
+
 export type Settings = {
   bgLocation: boolean;
   crashDetect: boolean;
   shareLiveLocation: boolean;
   haptics: boolean;
+  units: Units;
 };
 
 const DEFAULTS: Settings = {
@@ -15,6 +18,7 @@ const DEFAULTS: Settings = {
   crashDetect: true,
   shareLiveLocation: false,
   haptics: true,
+  units: 'metric',
 };
 
 const Ctx = createContext<{

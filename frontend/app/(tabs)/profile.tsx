@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
@@ -8,10 +8,17 @@ import { api } from '../../src/lib/api';
 import { colors, type, space } from '../../src/theme/tokens';
 import { Eyebrow, Rule, SpecRow, Card, Meta, Button } from '../../src/components/ui';
 
+// Curated city list from plan.tsx
+const CITIES = [
+  'Bangalore', 'Mysuru', 'Coorg', 'Manali', 'Leh', 'Spiti', 'Goa', 'Pondicherry', 'Shimla'
+];
+
 export default function Profile() {
-  const { user, signOut } = useAuth();
+  const { user, signOut, refresh } = useAuth();
   const router = useRouter();
   const [badges, setBadges] = useState<any[]>([]);
+  const [cityPickerOpen, setCityPickerOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   useFocusEffect(
     React.useCallback(() => {
@@ -20,6 +27,16 @@ export default function Profile() {
       })();
     }, [])
   );
+
+  const setHomeCity = async (city: string | null) => {
+    setSaving(true);
+    try {
+      await api.patch('/users/me', { home_city: city });
+      await refresh(); // pull fresh /auth/me so user.home_city updates in-context
+    } catch (e: any) {
+      Alert.alert('Could not save home city', e?.response?.data?.detail || e?.message || 'Please try again.');
+    } finally { setSaving(false); setCityPickerOpen(false); }
+  };
 
   if (!user) return null;
 
@@ -90,6 +107,33 @@ export default function Profile() {
         </View>
 
         <View style={styles.section}>
+          <Eyebrow>HOME CITY — FOR DISCOVER FILTER</Eyebrow>
+          <TouchableOpacity
+            testID="profile-home-city-btn"
+            onPress={() => setCityPickerOpen(true)}
+            style={styles.cityCard}
+            activeOpacity={0.85}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+              <View style={styles.cityIcon}>
+                <Feather name="map-pin" size={18} color={colors.light.ink} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[type.h3, { color: colors.light.ink }]}>
+                  {user.home_city || 'Not set'}
+                </Text>
+                <Meta style={{ marginTop: 2 }}>
+                  {user.home_city
+                    ? "TAP TO CHANGE — You'll see rides from here in Discover"
+                    : 'SET YOUR CITY — See only trips starting near you'}
+                </Meta>
+              </View>
+              <Feather name="chevron-right" size={18} color={colors.light.inkMuted} />
+            </View>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.section}>
           <Eyebrow>EMERGENCY CONTACTS — {user.emergency_contacts.length}</Eyebrow>
           <Card style={{ marginTop: space.sm }}>
             {user.emergency_contacts.length === 0 ? (
@@ -110,7 +154,7 @@ export default function Profile() {
           <Eyebrow>GLOVEBOX</Eyebrow>
           <TouchableOpacity
             testID="profile-glovebox-btn"
-            onPress={() => router.push('/glovebox')}
+            onPress={() => router.push('/glovebox' as any)}
             style={styles.gloveboxCard}
           >
             <View style={styles.gloveboxInner}>
@@ -119,9 +163,18 @@ export default function Profile() {
               </View>
               <View style={{ flex: 1, marginLeft: 14 }}>
                 <Text style={[type.h3, { color: colors.light.ink }]}>Your documents.</Text>
-                <Meta style={{ marginTop: 2 }}>RC · INSURANCE · LICENCE · MEDICAL — DEVICE ONLY</Meta>
+                <Meta style={{ marginTop: 2 }}>DEVICE-ONLY · NEVER UPLOADED</Meta>
               </View>
               <Feather name="chevron-right" size={18} color={colors.light.inkMuted} />
+            </View>
+            {/* M7 — ghost doc label chips so the card feels like a real glovebox */}
+            <View style={styles.gloveboxChips} testID="glovebox-ghost-chips">
+              {['RC BOOK', 'INSURANCE', 'LICENCE', 'MEDICAL'].map((label) => (
+                <View key={label} style={styles.ghostChip}>
+                  <Feather name="file-text" size={10} color={colors.light.inkMuted} />
+                  <Text style={[type.meta, { color: colors.light.inkMuted, marginLeft: 5 }]}>{label}</Text>
+                </View>
+              ))}
             </View>
           </TouchableOpacity>
         </View>
@@ -130,6 +183,55 @@ export default function Profile() {
           <Button label="SIGN OUT" variant="ghost" testID="profile-signout-btn" onPress={async () => { await signOut(); router.replace('/(auth)/login'); }} />
         </View>
       </ScrollView>
+
+      {cityPickerOpen && (
+        <View style={styles.pickerOverlay}>
+          <View style={styles.pickerModal}>
+            <View style={styles.pickerHead}>
+              <Eyebrow>SET HOME CITY</Eyebrow>
+              <TouchableOpacity onPress={() => setCityPickerOpen(false)} testID="profile-city-picker-close">
+                <Feather name="x" size={20} color={colors.light.ink} />
+              </TouchableOpacity>
+            </View>
+            <Rule />
+            <ScrollView contentContainerStyle={{ paddingBottom: space.lg }}>
+              {/* Clear selection option */}
+              <TouchableOpacity
+                testID="profile-city-clear"
+                style={styles.cityOption}
+                onPress={() => setHomeCity(null)}
+                activeOpacity={0.85}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={[type.body, { color: user.home_city ? colors.light.inkMuted : colors.light.ink }]}>
+                    Don't filter (show all trips)
+                  </Text>
+                </View>
+                {!user.home_city && <Feather name="check" size={18} color={colors.light.amber} />}
+              </TouchableOpacity>
+
+              {/* City options */}
+              {CITIES.map((city) => (
+                <TouchableOpacity
+                  key={city}
+                  testID={`profile-city-option-${city.toLowerCase()}`}
+                  style={styles.cityOption}
+                  onPress={() => setHomeCity(city)}
+                  activeOpacity={0.85}
+                  disabled={saving}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text style={[type.body, { color: user.home_city === city ? colors.light.ink : colors.light.inkMuted, fontFamily: user.home_city === city ? 'Fraunces_500Medium' : undefined }]}>
+                      {city}
+                    </Text>
+                  </View>
+                  {user.home_city === city && <Feather name="check" size={18} color={colors.light.amber} />}
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
+      )}
     </SafeAreaView>
   );
 }
@@ -148,6 +250,34 @@ const styles = StyleSheet.create({
   badgeRow: { flexDirection: 'row', alignItems: 'center', padding: space.md, borderWidth: 1, borderColor: colors.light.rule, backgroundColor: colors.light.surface, gap: 12 },
   badgeDot: { width: 32, height: 32, borderRadius: 16, borderWidth: 1, borderColor: colors.light.amber, alignItems: 'center', justifyContent: 'center' },
   gloveboxCard: { marginTop: space.sm, borderWidth: 1, borderColor: colors.light.rule, borderRadius: 2, backgroundColor: colors.light.surface },
-  gloveboxInner: { flexDirection: 'row', alignItems: 'center', padding: space.lg },
+  gloveboxInner: { flexDirection: 'row', alignItems: 'center', padding: space.lg, paddingBottom: space.sm },
   gloveboxIcon: { width: 36, height: 36, borderRadius: 18, borderWidth: 1, borderColor: colors.light.rule, alignItems: 'center', justifyContent: 'center' },
+  gloveboxChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: space.lg, paddingBottom: space.lg },
+  ghostChip: {
+    flexDirection: 'row', alignItems: 'center',
+    borderWidth: 1, borderColor: colors.light.rule,
+    borderRadius: 2, paddingVertical: 4, paddingHorizontal: 8,
+    backgroundColor: colors.light.bg,
+  },
+  // Home city picker
+  pickerOverlay: {
+    position: 'absolute', left: 0, right: 0, top: 0, bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end',
+  },
+  pickerModal: {
+    backgroundColor: colors.light.bg, borderTopWidth: 1, borderTopColor: colors.light.ink,
+    maxHeight: '70%', borderTopLeftRadius: 8, borderTopRightRadius: 8,
+  },
+  pickerHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: space.lg },
+  cityCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    borderWidth: 1, borderColor: colors.light.rule, borderRadius: 2,
+    padding: space.lg, backgroundColor: colors.light.surface, marginTop: space.sm,
+  },
+  cityIcon: { width: 40, height: 40, borderRadius: 20, borderWidth: 1, borderColor: colors.light.rule, alignItems: 'center', justifyContent: 'center' },
+  cityOption: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: space.lg, paddingVertical: space.md,
+    borderBottomWidth: 1, borderBottomColor: colors.light.rule,
+  },
 });

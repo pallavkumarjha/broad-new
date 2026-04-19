@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, useWindowDimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, Link } from 'expo-router';
 import { useAuth } from '../../src/contexts/AuthContext';
 import { colors, type, space, radius } from '../../src/theme/tokens';
-import { Eyebrow, Button, Rule } from '../../src/components/ui';
+import { Eyebrow, Button, Rule, ErrorStrip } from '../../src/components/ui';
+import { DawnIllus } from '../../src/components/illustrations';
 
 export default function Login() {
   const { signIn } = useAuth();
@@ -13,6 +14,7 @@ export default function Login() {
   const [password, setPassword] = useState('rider123');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
+  const [focused, setFocused] = useState<'email' | 'password' | null>(null);
 
   const submit = async () => {
     setErr(''); setBusy(true);
@@ -24,8 +26,14 @@ export default function Login() {
     } finally { setBusy(false); }
   };
 
+  const { width } = useWindowDimensions();
+
   return (
     <SafeAreaView style={styles.container} testID="login-screen">
+      {/* Illustration sits above the keyboard-avoiding zone so it scrolls away naturally */}
+      <View style={styles.illusWrap}>
+        <DawnIllus width={width} height={200} />
+      </View>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
           <View>
@@ -42,23 +50,29 @@ export default function Login() {
               testID="login-email-input"
               value={email}
               onChangeText={setEmail}
+              onFocus={() => setFocused('email')}
+              onBlur={() => setFocused(null)}
               autoCapitalize="none"
               keyboardType="email-address"
               placeholder="you@road.com"
               placeholderTextColor={colors.light.inkMuted}
-              style={styles.input}
+              style={[styles.input, focused === 'email' && styles.inputFocused]}
             />
             <Eyebrow style={{ marginTop: space.lg, marginBottom: space.xs }}>PASSWORD</Eyebrow>
             <TextInput
               testID="login-password-input"
               value={password}
               onChangeText={setPassword}
+              onFocus={() => setFocused('password')}
+              onBlur={() => setFocused(null)}
               secureTextEntry
               placeholder="••••••••"
               placeholderTextColor={colors.light.inkMuted}
-              style={styles.input}
+              style={[styles.input, focused === 'password' && styles.inputFocused]}
             />
-            {err ? <Text testID="login-error" style={[type.meta, { color: colors.light.danger, marginTop: space.md }]}>{err.toUpperCase()}</Text> : null}
+            {err ? (
+              <ErrorStrip testID="login-error" title="SIGN-IN FAILED" message={err} style={{ marginTop: space.md }} />
+            ) : null}
             <Button label="SIGN IN" onPress={submit} loading={busy} testID="login-submit-button" style={{ marginTop: space.lg }} />
           </View>
 
@@ -79,12 +93,14 @@ export default function Login() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.light.bg },
-  scroll: { padding: space.lg, paddingTop: space.xxl, flexGrow: 1 },
+  illusWrap: { width: '100%', borderBottomWidth: 1, borderBottomColor: colors.light.rule },
+  scroll: { padding: space.lg, paddingTop: space.lg, flexGrow: 1 },
   input: {
     borderWidth: 1, borderColor: colors.light.rule,
     paddingHorizontal: space.md, paddingVertical: space.md,
     fontFamily: 'Fraunces_400Regular', fontSize: 18, color: colors.light.ink,
     backgroundColor: '#FFFFFF', borderRadius: radius.tiny,
   },
+  inputFocused: { borderColor: colors.light.amber, borderWidth: 1.5 },
   footer: { flexDirection: 'row', justifyContent: 'center', marginTop: space.lg, alignItems: 'center' },
 });

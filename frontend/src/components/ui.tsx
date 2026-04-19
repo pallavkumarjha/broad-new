@@ -66,6 +66,31 @@ export function Button({ label, onPress, variant = 'primary', loading, dark, sty
   );
 }
 
+// ---------- ErrorStrip (inline error with left-border accent) ----------
+export function ErrorStrip({ title, message, testID, style }: {
+  title?: string;
+  message: string;
+  testID?: string;
+  style?: ViewStyle;
+}) {
+  return (
+    <View testID={testID} style={[{
+      flexDirection: 'row', alignItems: 'stretch',
+      backgroundColor: '#FDF1EF',
+      borderWidth: 1, borderColor: '#E5C9C3',
+      borderRadius: radius.tiny, overflow: 'hidden',
+    }, style]}>
+      <View style={{ width: 3, backgroundColor: colors.light.danger }} />
+      <View style={{ flex: 1, paddingHorizontal: space.md, paddingVertical: space.sm }}>
+        {title ? (
+          <Text style={[type.meta, { color: colors.light.danger }]}>{title}</Text>
+        ) : null}
+        <Text style={[type.body, { color: colors.light.ink, marginTop: title ? 2 : 0 }]}>{message}</Text>
+      </View>
+    </View>
+  );
+}
+
 // ---------- Spec Row (label → value) ----------
 export function SpecRow({ label, value, last, dark, valueMono = true, testID }: {
   label: string;

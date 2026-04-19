@@ -12,6 +12,7 @@ export default function SOS() {
   const router = useRouter();
   const [event, setEvent] = useState<any>(null);
   const blink = useRef(new Animated.Value(0.3)).current;
+  const pulse = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     Animated.loop(
@@ -20,7 +21,13 @@ export default function SOS() {
         Animated.timing(blink, { toValue: 0.25, duration: 700, useNativeDriver: true }),
       ])
     ).start();
-  }, [blink]);
+    Animated.loop(
+      Animated.timing(pulse, { toValue: 1, duration: 1400, useNativeDriver: true })
+    ).start();
+  }, [blink, pulse]);
+
+  const ringScale = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.6, 2.4] });
+  const ringOpacity = pulse.interpolate({ inputRange: [0, 0.8, 1], outputRange: [0.55, 0.05, 0] });
 
   useEffect(() => {
     (async () => {
@@ -42,7 +49,12 @@ export default function SOS() {
       <StatusBar barStyle="light-content" />
       <SafeAreaView style={{ flex: 1 }}>
         <View style={styles.header}>
-          <Animated.View style={[styles.bigDot, { opacity: blink }]} />
+          <View style={styles.dotWrap}>
+            <Animated.View
+              style={[styles.pulseRing, { transform: [{ scale: ringScale }], opacity: ringOpacity }]}
+            />
+            <Animated.View style={[styles.bigDot, { opacity: blink }]} />
+          </View>
           <Eyebrow color={colors.dark.sos}>SOS — BROADCASTING</Eyebrow>
         </View>
 
@@ -77,8 +89,13 @@ export default function SOS() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0A0303' },
-  header: { paddingHorizontal: space.lg, paddingTop: space.lg, flexDirection: 'row', alignItems: 'center', gap: 10 },
-  bigDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: colors.dark.sos },
+  header: { paddingHorizontal: space.lg, paddingTop: space.lg, flexDirection: 'row', alignItems: 'center', gap: 12 },
+  dotWrap: { width: 16, height: 16, alignItems: 'center', justifyContent: 'center' },
+  bigDot: { width: 16, height: 16, borderRadius: 8, backgroundColor: colors.dark.sos },
+  pulseRing: {
+    position: 'absolute', width: 16, height: 16, borderRadius: 8,
+    backgroundColor: colors.dark.sos,
+  },
   body: { flex: 1, paddingHorizontal: space.lg, paddingTop: space.xl },
   statBlock: { marginTop: space.xl, borderTopWidth: 1, borderColor: colors.dark.rule },
   list: { marginTop: space.xl },

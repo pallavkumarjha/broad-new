@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform, useWindowDimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
@@ -7,6 +7,7 @@ import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
 import { colors, type, space, radius } from '../../src/theme/tokens';
 import { Eyebrow, Button, Rule, Meta } from '../../src/components/ui';
+import { CompassIllus } from '../../src/components/illustrations';
 
 type Status = 'pending' | 'granted' | 'denied';
 
@@ -59,11 +60,16 @@ export default function Permissions() {
 
   const done = () => router.replace('/profile/edit?onboarding=1');
 
+  const grantedCount = [loc, notif, crash].filter(s => s === 'granted').length;
+
   const Item = ({ icon, title, desc, status, onAsk, testID }: any) => (
-    <View style={styles.card}>
+    <View style={[styles.card, status === 'granted' && styles.cardGranted]}>
+      {status === 'granted' && <View style={styles.grantedStripe} />}
       <View style={styles.cardHead}>
-        <Feather name={icon} size={18} color={colors.light.ink} />
-        <Eyebrow style={{ marginLeft: 10 }}>{status === 'granted' ? 'GRANTED' : status === 'denied' ? 'DENIED · CAN ENABLE LATER' : 'REQUIRED'}</Eyebrow>
+        <Feather name={icon} size={18} color={status === 'granted' ? colors.light.success : colors.light.ink} />
+        <Eyebrow style={{ marginLeft: 10, color: status === 'granted' ? colors.light.success : colors.light.inkMuted }}>
+          {status === 'granted' ? '✓ GRANTED' : status === 'denied' ? 'DENIED · CAN ENABLE LATER' : 'REQUIRED'}
+        </Eyebrow>
       </View>
       <Text style={[type.h3, { color: colors.light.ink, marginTop: space.sm }]}>{title}</Text>
       <Text style={[type.body, { color: colors.light.inkMuted, marginTop: 4 }]}>{desc}</Text>
@@ -82,15 +88,31 @@ export default function Permissions() {
     </View>
   );
 
+  const { width } = useWindowDimensions();
+
   return (
     <SafeAreaView style={styles.container} testID="permissions-screen">
       <ScrollView contentContainerStyle={{ paddingBottom: 140 }}>
+        <View style={styles.illusWrap}>
+          <CompassIllus width={width} height={180} />
+        </View>
         <View style={styles.header}>
-          <Eyebrow>BEFORE WE RIDE — THREE PERMISSIONS</Eyebrow>
+          <Eyebrow>THREE CHECKS BEFORE THE RIDE — {grantedCount}/3 READY</Eyebrow>
           <Text style={[type.h1, { color: colors.light.ink, marginTop: space.xs }]}>The safety kit.</Text>
           <Text style={[type.body, { color: colors.light.inkMuted, marginTop: space.xs }]}>
             Broad works best when it can see your location, send alerts, and feel the road. Each is optional — you can turn any of these off later.
           </Text>
+          <View style={styles.progressTrack} testID="perm-progress-track">
+            {[0, 1, 2].map((i) => (
+              <View
+                key={i}
+                style={[
+                  styles.progressCell,
+                  i < grantedCount && styles.progressCellOn,
+                ]}
+              />
+            ))}
+          </View>
         </View>
         <Rule />
 
@@ -134,10 +156,16 @@ export default function Permissions() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.light.bg },
+  illusWrap: { width: '100%', borderBottomWidth: 1, borderBottomColor: colors.light.rule },
   header: { padding: space.lg },
   list: { paddingHorizontal: space.lg, paddingTop: space.lg, gap: space.md },
-  card: { borderWidth: 1, borderColor: colors.light.rule, borderRadius: radius.tiny, padding: space.lg, backgroundColor: colors.light.surface, marginBottom: space.md },
+  card: { borderWidth: 1, borderColor: colors.light.rule, borderRadius: radius.tiny, padding: space.lg, backgroundColor: colors.light.surface, marginBottom: space.md, position: 'relative', overflow: 'hidden' },
+  cardGranted: { borderColor: colors.light.success, backgroundColor: colors.light.bg },
+  grantedStripe: { position: 'absolute', left: 0, top: 0, bottom: 0, width: 3, backgroundColor: colors.light.success },
   cardHead: { flexDirection: 'row', alignItems: 'center' },
   askBtn: { marginTop: space.md, alignSelf: 'flex-start', paddingVertical: 8, paddingHorizontal: 14, borderWidth: 1, borderColor: colors.light.ink, borderRadius: radius.tiny },
+  progressTrack: { flexDirection: 'row', gap: 6, marginTop: space.md },
+  progressCell: { flex: 1, height: 3, backgroundColor: colors.light.rule },
+  progressCellOn: { backgroundColor: colors.light.amber },
   cta: { position: 'absolute', left: 0, right: 0, bottom: 0, padding: space.lg, backgroundColor: colors.light.bg, borderTopWidth: 1, borderTopColor: colors.light.rule },
 });

@@ -1,14 +1,23 @@
 import React from 'react';
 import { Tabs } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
+import { Platform } from 'react-native';
 import { colors, fonts } from '../../src/theme/tokens';
+import { useSettings } from '../../src/contexts/SettingsContext';
 
 export default function TabsLayout() {
+  const { settings } = useSettings();
+  const tapHaptic = () => {
+    if (!settings.haptics || Platform.OS === 'web') return;
+    Haptics.selectionAsync().catch(() => {});
+  };
   return (
     <Tabs
+      screenListeners={{ tabPress: tapHaptic }}
       screenOptions={({ route }) => ({
         headerShown: false,
-        tabBarActiveTintColor: colors.light.ink,
+        tabBarActiveTintColor: colors.light.amber,
         tabBarInactiveTintColor: colors.light.inkMuted,
         tabBarStyle: {
           backgroundColor: colors.light.bg,
@@ -26,9 +35,9 @@ export default function TabsLayout() {
         },
         tabBarIcon: ({ color }) => {
           const map: Record<string, keyof typeof Feather.glyphMap> = {
-            index: 'compass',
+            index: 'home',
             trips: 'map',
-            discover: 'globe',
+            discover: 'compass',
             profile: 'user',
           };
           const name = map[route.name] || 'circle';
@@ -36,7 +45,7 @@ export default function TabsLayout() {
         },
       })}
     >
-      <Tabs.Screen name="index" options={{ title: 'Home' }} />
+      <Tabs.Screen name="index" options={{ title: 'Today' }} />
       <Tabs.Screen name="trips" options={{ title: 'Trips' }} />
       <Tabs.Screen name="discover" options={{ title: 'Discover' }} />
       <Tabs.Screen name="profile" options={{ title: 'Profile' }} />

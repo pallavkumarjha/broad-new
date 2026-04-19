@@ -1,28 +1,35 @@
 import React, { useCallback, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, useWindowDimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import { api } from '../../src/lib/api';
 import { colors, type, space } from '../../src/theme/tokens';
 import { Eyebrow, Rule, Meta } from '../../src/components/ui';
+import { EmptyRoadIllus } from '../../src/components/illustrations';
 
 const TABS: { key: string; label: string }[] = [
   { key: 'active', label: 'ACTIVE' },
   { key: 'planned', label: 'UPCOMING' },
-  { key: 'completed', label: 'PAST' },
+  { key: 'completed', label: 'LOGGED' },
 ];
 
 export default function Trips() {
   const router = useRouter();
+  const { width } = useWindowDimensions();
   const [trips, setTrips] = useState<any[]>([]);
+  const [pendingRequests, setPendingRequests] = useState<any[]>([]);
   const [tab, setTab] = useState<'active' | 'planned' | 'completed'>('planned');
   const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const { data } = await api.get('/trips');
-      setTrips(data);
+      const [tripsRes, reqRes] = await Promise.all([
+        api.get('/trips'),
+        api.get('/users/me/trip-requests').catch(() => ({ data: [] })),
+      ]);
+      setTrips(tripsRes.data);
+      setPendingRequests((reqRes.data || []).filter((r: any) => r.status === 'pending'));
     } catch {}
   }, []);
 
@@ -30,6 +37,12 @@ export default function Trips() {
 
   const onRefresh = async () => { setRefreshing(true); await load(); setRefreshing(false); };
   const filtered = trips.filter(t => t.status === tab);
+  // Map trip_id -> bool for quick lookup in the row
+  const pendingByTrip = React.useMemo(() => {
+    const m: Record<string, boolean> = {};
+    pendingRequests.forEach(r => { m[r.trip_id] = true; });
+    return m;
+  }, [pendingRequests]);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']} testID="trips-screen">
@@ -44,6 +57,21 @@ export default function Trips() {
         </View>
       </View>
 
+      {pendingRequests.length > 0 && (
+        <TouchableOpacity
+          testID="trips-pending-strip"
+          activeOpacity={0.85}
+          onPress={() => router.push(`/trip/${pendingRequests[0].trip_id}`)}
+          style={styles.pendingStrip}
+        >
+          <Feather name="clock" size={14} color={colors.light.amber} />
+          <Meta style={{ marginLeft: 8, color: colors.light.ink, flex: 1 }}>
+            {pendingRequests.length} JOIN REQUEST{pendingRequests.length === 1 ? '' : 'S'} PENDING — TAP TO REVIEW
+          </Meta>
+          <Feather name="chevron-right" size={16} color={colors.light.inkMuted} />
+        </TouchableOpacity>
+      )}
+
       <View style={styles.tabs}>
         {TABS.map(t => (
           <TouchableOpacity key={t.key} testID={`trips-tab-${t.key}`} onPress={() => setTab(t.key as any)} style={styles.tabBtn}>
@@ -57,27 +85,65 @@ export default function Trips() {
       <ScrollView contentContainerStyle={{ paddingBottom: space.xxl }} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
         {filtered.length === 0 ? (
           <View style={styles.empty}>
-            <Text style={[type.body, { color: colors.light.inkMuted, textAlign: 'center' }]}>
+            <EmptyRoadIllus width={width - space.lg * 2} height={150} />
+            <Text style={[type.body, { color: colors.light.inkMuted, textAlign: 'center', marginTop: space.lg }]}>
               {tab === 'active' && 'No trip in progress.'}
-              {tab === 'planned' && 'No upcoming trips. Tap NEW to plot one.'}
-              {tab === 'completed' && 'No completed trips yet. The road is patient.'}
+              {tab === 'planned' && 'No upcoming trips.\nThe road is waiting.'}
+              {tab === 'completed' && 'No trips logged yet.\nThe road is patient.'}
             </Text>
+            {tab !== 'active' && (
+              <TouchableOpacity
+                testID={`trips-empty-cta-${tab}`}
+                onPress={() => router.push('/plan')}
+                style={styles.emptyCta}
+                activeOpacity={0.85}
+              >
+                <Feather name="plus" size={14} color={colors.light.ink} />
+                <Meta style={{ marginLeft: 8, color: colors.light.ink }}>PLOT A NEW ROUTE</Meta>
+              </TouchableOpacity>
+            )}
+            {tab === 'active' && (
+              <TouchableOpacity
+                testID="trips-empty-cta-active"
+                onPress={() => setTab('planned')}
+                style={styles.emptyCta}
+                activeOpacity={0.85}
+              >
+                <Feather name="arrow-right" size={14} color={colors.light.ink} />
+                <Meta style={{ marginLeft: 8, color: colors.light.ink }}>SEE UPCOMING</Meta>
+              </TouchableOpacity>
+            )}
           </View>
-        ) : filtered.map((t) => (
-          <TouchableOpacity key={t.id} testID={`trip-row-${t.id}`} activeOpacity={0.7} onPress={() => router.push(t.status === 'active' ? `/ride/${t.id}` : `/trip/${t.id}`)} style={styles.row}>
-            <View style={{ flex: 1 }}>
-              <Eyebrow>{(t.planned_date || '').toUpperCase()}</Eyebrow>
-              <Text style={[type.h2, { color: colors.light.ink, marginTop: 4 }]}>{t.name}</Text>
-              <Meta style={{ marginTop: space.sm }}>
-                {(t.start?.name || '').toUpperCase()} → {(t.end?.name || '').toUpperCase()}
-              </Meta>
-              <Meta style={{ marginTop: 4, color: colors.light.amber }}>
-                {t.status === 'completed' ? `${t.actual_distance_km || t.distance_km} KM · ${t.top_speed_kmh || 0} KM/H TOP` : `${t.distance_km} KM · ${t.elevation_m} M`}
-              </Meta>
-            </View>
-            <Feather name="chevron-right" size={20} color={colors.light.inkMuted} />
-          </TouchableOpacity>
-        ))}
+        ) : filtered.map((t) => {
+          const hasPending = pendingByTrip[t.id];
+          return (
+            <TouchableOpacity key={t.id} testID={`trip-row-${t.id}`} activeOpacity={0.7} onPress={() => router.push(t.status === 'active' ? `/ride/${t.id}` : `/trip/${t.id}`)} style={styles.row}>
+              <View style={{ flex: 1 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Eyebrow>{(t.planned_date || '').toUpperCase()}</Eyebrow>
+                  {hasPending && (
+                    <View style={styles.rowBadge} testID={`trip-row-pending-${t.id}`}>
+                      <Meta style={{ color: colors.light.bg }}>PENDING</Meta>
+                    </View>
+                  )}
+                  {t.is_public && (
+                    <View style={styles.rowPublicBadge}>
+                      <Meta style={{ color: colors.light.amber }}>PUBLIC</Meta>
+                    </View>
+                  )}
+                </View>
+                <Text style={[type.h2, { color: colors.light.ink, marginTop: 4 }]}>{t.name}</Text>
+                <Meta style={{ marginTop: space.sm }}>
+                  {(t.start?.name || '').toUpperCase()} → {(t.end?.name || '').toUpperCase()}
+                </Meta>
+                <Meta style={{ marginTop: 4, color: colors.light.amber }}>
+                  {t.status === 'completed' ? `${t.actual_distance_km || t.distance_km} KM · ${t.top_speed_kmh || 0} KM/H TOP` : `${t.distance_km} KM · ${t.elevation_m} M`}
+                </Meta>
+              </View>
+              <Feather name="chevron-right" size={20} color={colors.light.inkMuted} />
+            </TouchableOpacity>
+          );
+        })}
       </ScrollView>
     </SafeAreaView>
   );
@@ -96,5 +162,26 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.lg, paddingVertical: space.lg,
     borderBottomWidth: 1, borderBottomColor: colors.light.rule,
   },
-  empty: { padding: space.xxl, alignItems: 'center' },
+  empty: { paddingHorizontal: space.lg, paddingVertical: space.xl, alignItems: 'center' },
+  emptyCta: {
+    flexDirection: 'row', alignItems: 'center',
+    borderWidth: 1, borderColor: colors.light.ink,
+    paddingVertical: 10, paddingHorizontal: 16,
+    borderRadius: 2, marginTop: space.lg,
+  },
+  pendingStrip: {
+    flexDirection: 'row', alignItems: 'center',
+    marginHorizontal: space.lg, marginBottom: space.sm,
+    paddingHorizontal: space.md, paddingVertical: space.sm,
+    borderWidth: 1, borderColor: colors.light.amber,
+    backgroundColor: colors.light.surface, borderRadius: 2,
+  },
+  rowBadge: {
+    paddingHorizontal: 6, paddingVertical: 2,
+    backgroundColor: colors.light.amber, borderRadius: 2,
+  },
+  rowPublicBadge: {
+    paddingHorizontal: 6, paddingVertical: 2,
+    borderWidth: 1, borderColor: colors.light.amber, borderRadius: 2,
+  },
 });

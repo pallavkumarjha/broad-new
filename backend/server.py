@@ -19,6 +19,7 @@ import httpx
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, WebSocket, WebSocketDisconnect
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo.errors import DuplicateKeyError
 from pydantic import BaseModel, Field, EmailStr
 
 
@@ -27,18 +28,32 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(level
 logger = logging.getLogger("broad")
 
 
-# ---------- Rate limiter (in-memory, per IP) ----------
+# ---------- Rate limiter (in-memory, per (scope, key)) ----------
+# NOTE: Single-instance only. Scaling beyond one uvicorn worker requires a
+# Redis-backed store — swap _rl_store for a RedisTimeWindow once deployed behind a
+# load balancer. See docs/ops/rate-limiting.md (TODO) for the migration.
 _rl_store: dict = defaultdict(list)
 
-def _rate_limit(ip: str, max_hits: int = 10, window: int = 60) -> None:
-    """Raise HTTP 429 if `ip` has exceeded `max_hits` calls in the last `window` seconds."""
+def _rate_limit(key: str, max_hits: int = 10, window: int = 60, scope: str = "default") -> None:
+    """Raise HTTP 429 if `key` has exceeded `max_hits` calls within `window` seconds in `scope`.
+    No-ops entirely when RATE_LIMIT_DISABLED=1 — used by the test suite."""
+    if os.environ.get("RATE_LIMIT_DISABLED") == "1":
+        return
+    bucket = f"{scope}:{key}"
     now = time.monotonic()
-    hits = _rl_store[ip]
-    # prune old entries
-    _rl_store[ip] = [t for t in hits if now - t < window]
-    if len(_rl_store[ip]) >= max_hits:
+    hits = _rl_store[bucket]
+    _rl_store[bucket] = [t for t in hits if now - t < window]
+    if len(_rl_store[bucket]) >= max_hits:
         raise HTTPException(status_code=429, detail="Too many requests — try again later")
-    _rl_store[ip].append(now)
+    _rl_store[bucket].append(now)
+
+
+def _client_ip(request: Request) -> str:
+    # Honour X-Forwarded-For when present (set by trusted reverse proxies like Render/Fly)
+    fwd = request.headers.get("x-forwarded-for", "")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
 
 
 # ---------- DB ----------
@@ -70,14 +85,45 @@ def verify_password(plain: str, hashed: str) -> bool:
         return False
 
 
+ACCESS_TOKEN_TTL = timedelta(hours=2)
+REFRESH_TOKEN_TTL = timedelta(days=30)
+
+
 def create_access_token(user_id: str, email: str) -> str:
     payload = {
         "sub": user_id,
         "email": email,
-        "exp": datetime.now(timezone.utc) + timedelta(days=14),
+        "exp": datetime.now(timezone.utc) + ACCESS_TOKEN_TTL,
         "type": "access",
     }
     return pyjwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGO)
+
+
+def create_refresh_token(user_id: str, jti: str) -> str:
+    """Long-lived refresh token. `jti` is stored server-side so we can revoke it."""
+    payload = {
+        "sub": user_id,
+        "jti": jti,
+        "exp": datetime.now(timezone.utc) + REFRESH_TOKEN_TTL,
+        "type": "refresh",
+    }
+    return pyjwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGO)
+
+
+async def _issue_refresh(user_id: str, request: Request | None = None) -> str:
+    """Create a refresh-token record in Mongo and return the signed JWT."""
+    jti = str(uuid.uuid4())
+    doc = {
+        "jti": jti,
+        "user_id": user_id,
+        "created_at": now_iso(),
+        "expires_at": (datetime.now(timezone.utc) + REFRESH_TOKEN_TTL).isoformat(),
+        "revoked": False,
+        "ip": _client_ip(request) if request else None,
+        "user_agent": (request.headers.get("user-agent") if request else None),
+    }
+    await db.refresh_tokens.insert_one(doc)
+    return create_refresh_token(user_id, jti)
 
 
 def now_iso() -> str:
@@ -111,6 +157,7 @@ class UserPublic(BaseModel):
     bike: Bike = Field(default_factory=Bike)
     emergency_contacts: List[EmergencyContact] = Field(default_factory=list)
     stats: UserStats = Field(default_factory=UserStats)
+    home_city: Optional[str] = None  # e.g. "Bangalore", "Manali" — filters Discover trips
     created_at: str
 
 
@@ -126,14 +173,20 @@ class LoginIn(BaseModel):
 
 
 class AuthOut(BaseModel):
-    token: str
+    token: str                      # short-lived access token (2 hours)
+    refresh_token: Optional[str] = None  # long-lived refresh token (30 days) — Optional for back-compat
     user: UserPublic
+
+
+class RefreshIn(BaseModel):
+    refresh_token: str
 
 
 class UpdateUserIn(BaseModel):
     name: Optional[str] = None
     bike: Optional[Bike] = None
     emergency_contacts: Optional[List[EmergencyContact]] = None
+    home_city: Optional[str] = None
 
 
 class Waypoint(BaseModel):
@@ -154,6 +207,10 @@ class TripCreate(BaseModel):
     crew_ids: List[str] = Field(default_factory=list)   # user IDs for push notifications
     notes: Optional[str] = ""
     is_public: bool = False
+    # ---- Public-trip fields (only meaningful when is_public=True) ----
+    max_riders: int = 8                # cap including organiser; 2..50
+    description: str = ""              # optional public-facing pitch
+    city: str = ""                     # short region tag, e.g. "Bangalore" — used by Discover filter
 
 
 class PushTokenIn(BaseModel):
@@ -177,6 +234,23 @@ class TripUpdate(BaseModel):
     actual_distance_km: Optional[float] = None
     top_speed_kmh: Optional[float] = None
     duration_min: Optional[int] = None
+
+
+class TripRequestCreate(BaseModel):
+    note: Optional[str] = ""
+
+
+class TripRequest(BaseModel):
+    id: str
+    trip_id: str
+    requested_by: str                 # user id
+    requester_name: str
+    requester_email: str
+    note: str = ""
+    status: Literal["pending", "approved", "declined", "cancelled"] = "pending"
+    created_at: str
+    decided_at: Optional[str] = None
+    decided_by: Optional[str] = None  # organiser user id
 
 
 class SOSCreate(BaseModel):
@@ -227,6 +301,7 @@ def to_public(u: dict) -> UserPublic:
         bike=Bike(**(u.get("bike") or {})),
         emergency_contacts=[EmergencyContact(**c) for c in (u.get("emergency_contacts") or [])],
         stats=UserStats(**(u.get("stats") or {})),
+        home_city=u.get("home_city"),
         created_at=u.get("created_at", now_iso()),
     )
 
@@ -234,7 +309,8 @@ def to_public(u: dict) -> UserPublic:
 # ---------- Auth routes ----------
 @api.post("/auth/register", response_model=AuthOut)
 async def register(body: RegisterIn, request: Request):
-    _rate_limit(request.client.host if request.client else "unknown")
+    # 5 registrations per hour per IP to stop account farming
+    _rate_limit(_client_ip(request), max_hits=5, window=3600, scope="register")
     email = body.email.lower().strip()
     existing = await db.users.find_one({"email": email})
     if existing:
@@ -252,21 +328,26 @@ async def register(body: RegisterIn, request: Request):
     }
     await db.users.insert_one(doc)
     token = create_access_token(uid, email)
+    refresh = await _issue_refresh(uid, request)
     doc.pop("password_hash", None)
     doc.pop("_id", None)
-    return AuthOut(token=token, user=to_public(doc))
+    return AuthOut(token=token, refresh_token=refresh, user=to_public(doc))
 
 
 @api.post("/auth/login", response_model=AuthOut)
 async def login(body: LoginIn, request: Request):
-    _rate_limit(request.client.host if request.client else "unknown")
+    # 10 attempts per 5 minutes per IP — room for typos, hostile to brute-force
+    _rate_limit(_client_ip(request), max_hits=10, window=300, scope="login")
+    # Also rate-limit per-email so IP-hopping brute force hits a wall at the account
+    _rate_limit(body.email.lower().strip(), max_hits=15, window=900, scope="login_email")
     email = body.email.lower().strip()
     user = await db.users.find_one({"email": email}, {"_id": 0})
     if not user or not verify_password(body.password, user.get("password_hash", "")):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     token = create_access_token(user["id"], email)
+    refresh = await _issue_refresh(user["id"], request)
     user.pop("password_hash", None)
-    return AuthOut(token=token, user=to_public(user))
+    return AuthOut(token=token, refresh_token=refresh, user=to_public(user))
 
 
 @api.get("/auth/me", response_model=UserPublic)
@@ -274,15 +355,65 @@ async def me(user: dict = Depends(get_current_user)):
     return to_public(user)
 
 
+@api.post("/auth/refresh", response_model=AuthOut)
+async def refresh_auth(body: RefreshIn, request: Request):
+    """Exchange a valid refresh token for a new access token.
+    Uses refresh-token rotation: old jti is revoked, new jti issued, so a stolen
+    refresh token is only usable until its next legitimate refresh."""
+    _rate_limit(_client_ip(request), max_hits=30, window=300, scope="refresh")
+    try:
+        payload = pyjwt.decode(body.refresh_token, get_jwt_secret(), algorithms=[JWT_ALGO])
+    except pyjwt.PyJWTError:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
+    if payload.get("type") != "refresh":
+        raise HTTPException(status_code=401, detail="Not a refresh token")
+    jti = payload.get("jti")
+    uid = payload.get("sub")
+    if not jti or not uid:
+        raise HTTPException(status_code=401, detail="Malformed refresh token")
+    record = await db.refresh_tokens.find_one({"jti": jti})
+    if not record or record.get("revoked"):
+        raise HTTPException(status_code=401, detail="Refresh token revoked")
+    user = await db.users.find_one({"id": uid}, {"_id": 0, "password_hash": 0})
+    if not user:
+        raise HTTPException(status_code=401, detail="User no longer exists")
+    # Rotate: revoke old, issue new
+    await db.refresh_tokens.update_one({"jti": jti}, {"$set": {"revoked": True, "revoked_at": now_iso()}})
+    new_access = create_access_token(uid, user.get("email", ""))
+    new_refresh = await _issue_refresh(uid, request)
+    return AuthOut(token=new_access, refresh_token=new_refresh, user=to_public(user))
+
+
+@api.post("/auth/logout")
+async def logout(body: RefreshIn, user: dict = Depends(get_current_user)):
+    """Revoke the supplied refresh token. Access tokens naturally expire (2h)."""
+    try:
+        payload = pyjwt.decode(body.refresh_token, get_jwt_secret(), algorithms=[JWT_ALGO])
+        jti = payload.get("jti")
+        if jti:
+            await db.refresh_tokens.update_one(
+                {"jti": jti, "user_id": user["id"]},
+                {"$set": {"revoked": True, "revoked_at": now_iso()}},
+            )
+    except pyjwt.PyJWTError:
+        pass  # Silently accept — logout should never fail from the user's perspective
+    return {"ok": True}
+
+
 @api.patch("/users/me", response_model=UserPublic)
 async def update_me(body: UpdateUserIn, user: dict = Depends(get_current_user)):
+    # Use model_fields_set so we can distinguish "field omitted" from "field sent as null".
+    # Clients clear home_city by sending {"home_city": null} — the null path must reach Mongo.
+    sent = body.model_fields_set
     update = {}
-    if body.name is not None:
+    if "name" in sent and body.name is not None:
         update["name"] = body.name.strip()
-    if body.bike is not None:
+    if "bike" in sent and body.bike is not None:
         update["bike"] = body.bike.dict()
-    if body.emergency_contacts is not None:
+    if "emergency_contacts" in sent and body.emergency_contacts is not None:
         update["emergency_contacts"] = [c.dict() for c in body.emergency_contacts]
+    if "home_city" in sent:
+        update["home_city"] = body.home_city.strip() if body.home_city else None
     if update:
         await db.users.update_one({"id": user["id"]}, {"$set": update})
     fresh = await db.users.find_one({"id": user["id"]}, {"_id": 0, "password_hash": 0})
@@ -297,6 +428,8 @@ def trip_from_doc(d: dict) -> Trip:
 
 @api.post("/trips", response_model=Trip)
 async def create_trip(body: TripCreate, user: dict = Depends(get_current_user)):
+    # 30 trips/hour per user — generous for real planners, hostile to spam bots
+    _rate_limit(user["id"], max_hits=30, window=3600, scope="create_trip")
     tid = str(uuid.uuid4())
     doc = {
         "id": tid,
@@ -328,11 +461,17 @@ async def list_trips(
 
 
 @api.get("/trips/discover", response_model=List[Trip])
-async def discover_trips(user: dict = Depends(get_current_user)):
-    cursor = db.trips.find(
-        {"is_public": True, "status": {"$in": ["planned", "active"]}},
-        {"_id": 0},
-    ).sort("created_at", -1)
+async def discover_trips(user: dict = Depends(get_current_user), show_all: bool = False):
+    """Get public trips. If user has a home_city set, filter to that city unless show_all=True."""
+    query = {"is_public": True, "status": {"$in": ["planned", "active"]}}
+
+    # Filter by user's home city if set and show_all is False
+    if not show_all:
+        home_city = (user.get("home_city") or "").strip()
+        if home_city:
+            query["city"] = home_city
+
+    cursor = db.trips.find(query, {"_id": 0}).sort("created_at", -1)
     docs = await cursor.to_list(100)
     return [trip_from_doc(d) for d in docs]
 
@@ -383,6 +522,248 @@ async def delete_trip(trip_id: str, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=403, detail="Forbidden")
     await db.trips.delete_one({"id": trip_id})
     return {"ok": True}
+
+
+# ---------- Trip requests (public-trip join flow) ----------
+def trip_request_from_doc(d: dict) -> TripRequest:
+    d = {k: v for k, v in d.items() if k != "_id"}
+    return TripRequest(**d)
+
+
+async def _push_to_users(user_ids: List[str], title: str, body: str, data: dict | None = None) -> None:
+    """Look up Expo push tokens for the given user ids and send a notification."""
+    if not user_ids:
+        return
+    cursor = db.users.find(
+        {"id": {"$in": user_ids}, "expo_push_token": {"$exists": True, "$ne": ""}},
+        {"_id": 0, "expo_push_token": 1},
+    )
+    members = await cursor.to_list(50)
+    tokens = [m["expo_push_token"] for m in members if m.get("expo_push_token")]
+    await _send_expo_push(tokens, title, body, data)
+
+
+@api.post("/trips/{trip_id}/request-join", response_model=TripRequest)
+async def request_join_trip(trip_id: str, body: TripRequestCreate, request: Request, user: dict = Depends(get_current_user)):
+    """Rider asks to join a public trip. Creates a pending TripRequest and pushes the organiser."""
+    # Cap join requests so a hostile user can't spam organisers' push inboxes
+    _rate_limit(user["id"], max_hits=10, window=3600, scope="join_requests")
+    _rate_limit(_client_ip(request), max_hits=20, window=3600, scope="join_requests_ip")
+    trip = await db.trips.find_one({"id": trip_id}, {"_id": 0})
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    if not trip.get("is_public"):
+        raise HTTPException(status_code=400, detail="This ride isn't open to requests")
+    if trip.get("status") not in ("planned", "active"):
+        raise HTTPException(status_code=400, detail="This ride is no longer accepting riders")
+    if trip["user_id"] == user["id"]:
+        raise HTTPException(status_code=400, detail="You're already the organiser")
+    if user["id"] in (trip.get("crew_ids") or []):
+        raise HTTPException(status_code=400, detail="You're already on this ride")
+    # Capacity check (organiser counts as 1)
+    max_riders = int(trip.get("max_riders") or 8)
+    if 1 + len(trip.get("crew_ids") or []) >= max_riders:
+        raise HTTPException(status_code=400, detail="This ride is full")
+    # Reject duplicates (the partial unique index will also catch races)
+    existing = await db.trip_requests.find_one({"trip_id": trip_id, "requested_by": user["id"], "status": "pending"})
+    if existing:
+        raise HTTPException(status_code=400, detail="You've already requested to join")
+    rid = str(uuid.uuid4())
+    doc = {
+        "id": rid,
+        "trip_id": trip_id,
+        "requested_by": user["id"],
+        "requester_name": user.get("name", "A rider"),
+        "requester_email": user.get("email", ""),
+        "note": (body.note or "").strip()[:240],
+        "status": "pending",
+        "created_at": now_iso(),
+        "decided_at": None,
+        "decided_by": None,
+    }
+    try:
+        await db.trip_requests.insert_one(doc)
+    except DuplicateKeyError:
+        raise HTTPException(status_code=400, detail="You've already requested to join")
+    # Notify organiser (best-effort)
+    import asyncio
+    asyncio.ensure_future(_push_to_users(
+        [trip["user_id"]],
+        title="New ride request",
+        body=f"{doc['requester_name']} wants to join {trip.get('name', 'your ride')}.",
+        data={"type": "trip_request", "trip_id": trip_id, "request_id": rid},
+    ))
+    return trip_request_from_doc(doc)
+
+
+# Frontend already calls /trips/{id}/join — keep that name working by aliasing it to request-join
+@api.post("/trips/{trip_id}/join", response_model=TripRequest)
+async def join_trip_alias(trip_id: str, request: Request, user: dict = Depends(get_current_user)):
+    """Backwards-compatible alias used by the Discover screen. Creates a pending join request."""
+    return await request_join_trip(trip_id, TripRequestCreate(note=""), request, user)
+
+
+@api.get("/trips/{trip_id}/requests", response_model=List[TripRequest])
+async def list_trip_requests(trip_id: str, user: dict = Depends(get_current_user)):
+    """Organiser-only: list all requests for a trip (any status)."""
+    trip = await db.trips.find_one({"id": trip_id}, {"_id": 0, "user_id": 1})
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    if trip["user_id"] != user["id"]:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    cursor = db.trip_requests.find({"trip_id": trip_id}, {"_id": 0}).sort("created_at", -1)
+    docs = await cursor.to_list(200)
+    return [trip_request_from_doc(d) for d in docs]
+
+
+@api.post("/trips/{trip_id}/requests/{rid}/approve", response_model=TripRequest)
+async def approve_trip_request(trip_id: str, rid: str, user: dict = Depends(get_current_user)):
+    trip = await db.trips.find_one({"id": trip_id}, {"_id": 0})
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    if trip["user_id"] != user["id"]:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    req = await db.trip_requests.find_one({"id": rid, "trip_id": trip_id}, {"_id": 0})
+    if not req:
+        raise HTTPException(status_code=404, detail="Request not found")
+    if req["status"] != "pending":
+        raise HTTPException(status_code=400, detail=f"Request is already {req['status']}")
+    # Capacity re-check
+    max_riders = int(trip.get("max_riders") or 8)
+    if 1 + len(trip.get("crew_ids") or []) >= max_riders:
+        raise HTTPException(status_code=400, detail="Ride is full")
+    requester_id = req["requested_by"]
+    requester = await db.users.find_one({"id": requester_id}, {"_id": 0, "name": 1})
+    requester_name = (requester or {}).get("name", req.get("requester_name", "Rider"))
+    # Add to crew (idempotent via $addToSet)
+    await db.trips.update_one(
+        {"id": trip_id},
+        {"$addToSet": {"crew_ids": requester_id, "crew": requester_name}},
+    )
+    decided = now_iso()
+    await db.trip_requests.update_one(
+        {"id": rid},
+        {"$set": {"status": "approved", "decided_at": decided, "decided_by": user["id"]}},
+    )
+    req.update({"status": "approved", "decided_at": decided, "decided_by": user["id"]})
+    # Notify requester
+    import asyncio
+    asyncio.ensure_future(_push_to_users(
+        [requester_id],
+        title="You're in",
+        body=f"{user.get('name','The organiser')} approved you for {trip.get('name','the ride')}.",
+        data={"type": "trip_request_approved", "trip_id": trip_id, "request_id": rid},
+    ))
+    return trip_request_from_doc(req)
+
+
+@api.post("/trips/{trip_id}/requests/{rid}/decline", response_model=TripRequest)
+async def decline_trip_request(trip_id: str, rid: str, user: dict = Depends(get_current_user)):
+    trip = await db.trips.find_one({"id": trip_id}, {"_id": 0, "user_id": 1, "name": 1})
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    if trip["user_id"] != user["id"]:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    req = await db.trip_requests.find_one({"id": rid, "trip_id": trip_id}, {"_id": 0})
+    if not req:
+        raise HTTPException(status_code=404, detail="Request not found")
+    if req["status"] != "pending":
+        raise HTTPException(status_code=400, detail=f"Request is already {req['status']}")
+    decided = now_iso()
+    await db.trip_requests.update_one(
+        {"id": rid},
+        {"$set": {"status": "declined", "decided_at": decided, "decided_by": user["id"]}},
+    )
+    req.update({"status": "declined", "decided_at": decided, "decided_by": user["id"]})
+    import asyncio
+    asyncio.ensure_future(_push_to_users(
+        [req["requested_by"]],
+        title="Request declined",
+        body=f"Your request to join {trip.get('name','the ride')} wasn't accepted.",
+        data={"type": "trip_request_declined", "trip_id": trip_id, "request_id": rid},
+    ))
+    return trip_request_from_doc(req)
+
+
+@api.post("/trips/{trip_id}/requests/{rid}/cancel", response_model=TripRequest)
+async def cancel_trip_request(trip_id: str, rid: str, user: dict = Depends(get_current_user)):
+    """Requester-only: withdraw your own pending request."""
+    req = await db.trip_requests.find_one({"id": rid, "trip_id": trip_id}, {"_id": 0})
+    if not req:
+        raise HTTPException(status_code=404, detail="Request not found")
+    if req["requested_by"] != user["id"]:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if req["status"] != "pending":
+        raise HTTPException(status_code=400, detail=f"Request is already {req['status']}")
+    decided = now_iso()
+    await db.trip_requests.update_one(
+        {"id": rid},
+        {"$set": {"status": "cancelled", "decided_at": decided, "decided_by": user["id"]}},
+    )
+    req.update({"status": "cancelled", "decided_at": decided, "decided_by": user["id"]})
+    return trip_request_from_doc(req)
+
+
+@api.post("/trips/{trip_id}/leave")
+async def leave_trip(trip_id: str, user: dict = Depends(get_current_user)):
+    """Confirmed crew member leaves a ride. Organiser cannot leave their own trip — must delete it."""
+    trip = await db.trips.find_one({"id": trip_id}, {"_id": 0})
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    if trip["user_id"] == user["id"]:
+        raise HTTPException(status_code=400, detail="Organisers can't leave — delete the ride instead")
+    if user["id"] not in (trip.get("crew_ids") or []):
+        raise HTTPException(status_code=400, detail="You're not on this ride")
+    name = user.get("name", "")
+    await db.trips.update_one(
+        {"id": trip_id},
+        {"$pull": {"crew_ids": user["id"], "crew": name}},
+    )
+    # Notify organiser quietly
+    import asyncio
+    asyncio.ensure_future(_push_to_users(
+        [trip["user_id"]],
+        title="A rider left",
+        body=f"{name or 'A rider'} left {trip.get('name','your ride')}.",
+        data={"type": "trip_left", "trip_id": trip_id},
+    ))
+    return {"ok": True}
+
+
+@api.post("/trips/{trip_id}/riders/{uid}/remove")
+async def remove_trip_rider(trip_id: str, uid: str, user: dict = Depends(get_current_user)):
+    """Organiser-only: remove a confirmed rider."""
+    trip = await db.trips.find_one({"id": trip_id}, {"_id": 0})
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    if trip["user_id"] != user["id"]:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if uid == user["id"]:
+        raise HTTPException(status_code=400, detail="Organisers can't remove themselves")
+    if uid not in (trip.get("crew_ids") or []):
+        raise HTTPException(status_code=400, detail="That rider isn't on this ride")
+    removed = await db.users.find_one({"id": uid}, {"_id": 0, "name": 1})
+    removed_name = (removed or {}).get("name", "")
+    await db.trips.update_one(
+        {"id": trip_id},
+        {"$pull": {"crew_ids": uid, "crew": removed_name}},
+    )
+    import asyncio
+    asyncio.ensure_future(_push_to_users(
+        [uid],
+        title="Removed from ride",
+        body=f"You were removed from {trip.get('name','a ride')}.",
+        data={"type": "trip_removed", "trip_id": trip_id},
+    ))
+    return {"ok": True}
+
+
+@api.get("/users/me/trip-requests", response_model=List[TripRequest])
+async def my_trip_requests(user: dict = Depends(get_current_user)):
+    """All requests this user has made (any status), newest first. Used for the Trips badge."""
+    cursor = db.trip_requests.find({"requested_by": user["id"]}, {"_id": 0}).sort("created_at", -1)
+    docs = await cursor.to_list(200)
+    return [trip_request_from_doc(d) for d in docs]
 
 
 # ---------- Convoy (mocked) ----------
@@ -469,7 +850,10 @@ async def _notify_sos_crew(sos_doc: dict, sender_name: str) -> None:
 
 # ---------- SOS ----------
 @api.post("/sos", response_model=SOSEvent)
-async def trigger_sos(body: SOSCreate, user: dict = Depends(get_current_user)):
+async def trigger_sos(body: SOSCreate, request: Request, user: dict = Depends(get_current_user)):
+    # SOS notifies crew via push + WebSocket. Cap at 5/hour per user — enough for a real
+    # emergency + retries, tight enough to block spam without stranding a user in a crash.
+    _rate_limit(user["id"], max_hits=5, window=3600, scope="sos")
     sid = str(uuid.uuid4())
     doc = {
         "id": sid,
@@ -582,8 +966,10 @@ NOMINATIM_HEADERS = {"User-Agent": "Broad-Rider-Companion/1.0 (rider@broad.app)"
 
 
 @api.get("/places/search")
-async def places_search(q: str, user: dict = Depends(get_current_user)):
+async def places_search(q: str, request: Request, user: dict = Depends(get_current_user)):
     """Free OpenStreetMap-backed geocoding. Limited to India by countrycodes=in."""
+    # Nominatim enforces 1 req/sec — protect our global User-Agent budget per user
+    _rate_limit(user["id"], max_hits=60, window=60, scope="places_search")
     if not q or len(q.strip()) < 2:
         return {"results": []}
     try:
@@ -610,8 +996,10 @@ class ElevationIn(BaseModel):
 
 
 @api.post("/places/elevation")
-async def places_elevation(body: ElevationIn, user: dict = Depends(get_current_user)):
+async def places_elevation(body: ElevationIn, request: Request, user: dict = Depends(get_current_user)):
     """Real elevation via Open-Elevation. Returns per-point elevation_m and a simple max."""
+    # Open-Elevation is a free community API — be a good citizen
+    _rate_limit(user["id"], max_hits=30, window=60, scope="elevation")
     if not body.points:
         return {"elevations": [], "max_m": 0}
     try:
@@ -753,6 +1141,18 @@ async def seed():
     await db.users.create_index("email", unique=True)
     await db.trips.create_index("user_id")
     await db.trips.create_index("is_public")
+    await db.trips.create_index("city")
+    await db.refresh_tokens.create_index("jti", unique=True)
+    await db.refresh_tokens.create_index("user_id")
+    await db.trip_requests.create_index([("trip_id", 1), ("status", 1)])
+    await db.trip_requests.create_index([("requested_by", 1), ("status", 1)])
+    # one pending request per (trip, user) — approved/declined/cancelled allowed to repeat history
+    await db.trip_requests.create_index(
+        [("trip_id", 1), ("requested_by", 1), ("status", 1)],
+        name="uniq_pending_per_user_per_trip",
+        unique=True,
+        partialFilterExpression={"status": "pending"},
+    )
 
     admin_email = os.environ.get("ADMIN_EMAIL", "rider@broad.app")
     admin_password = os.environ.get("ADMIN_PASSWORD")
@@ -775,6 +1175,27 @@ async def seed():
             "created_at": now_iso(),
         })
         existing = await db.users.find_one({"email": admin_email})
+
+    # Heal admin state if earlier tests mutated name/bike. Keeps seeded fixtures
+    # deterministic across runs without wiping the DB. Tests assert on these
+    # canonical values, so we restore them on every boot.
+    if existing:
+        canonical_bike = {
+            "make": "Royal Enfield",
+            "model": "Himalayan 450",
+            "registration": "KA-01-AB-2024",
+            "odometer_km": 18420,
+        }
+        healed: dict = {}
+        if existing.get("name") != "Arjun Mehra":
+            healed["name"] = "Arjun Mehra"
+        if (existing.get("bike") or {}).get("make") != "Royal Enfield":
+            healed["bike"] = canonical_bike
+        if "home_city" not in existing:
+            healed["home_city"] = None
+        if healed:
+            await db.users.update_one({"email": admin_email}, {"$set": healed})
+            existing = await db.users.find_one({"email": admin_email})
 
     # Seed sample trips for the admin
     if existing and (await db.trips.count_documents({"user_id": existing["id"]})) == 0:
@@ -838,6 +1259,9 @@ async def seed():
                 "crew": ["Open"],
                 "notes": "8 days. Spiti circuit with acclimatisation day at Kaza.",
                 "is_public": True,
+                "max_riders": 8,
+                "description": "Eight days through the cold desert. Tar gives way to gravel after Reckong Peo. Riders should be comfortable on loose surfaces, carry their own basic spares, and have at least one Himalayan ride under their belt.",
+                "city": "Shimla",
                 "status": "planned",
                 "started_at": None, "ended_at": None,
                 "actual_distance_km": 0, "top_speed_kmh": 0, "duration_min": 0,
@@ -845,6 +1269,46 @@ async def seed():
             },
         ]
         await db.trips.insert_many(sample_trips)
+
+    # Idempotent seed for the public Spiti trip — ensures Discover has at least one
+    # public trip even in DBs that were seeded before public-trips existed.
+    # Also heal pre-existing Spiti records that lack the public-trip fields.
+    if existing:
+        healthy = await db.trips.find_one({
+            "name": "Spiti Loop — Open Invite",
+            "is_public": True,
+            "city": "Shimla",
+            "status": "planned",
+        })
+        if not healthy:
+            # Remove any broken variant so we don't duplicate on name
+            await db.trips.delete_many({"name": "Spiti Loop — Open Invite"})
+    if existing and not await db.trips.find_one({"name": "Spiti Loop — Open Invite"}):
+        await db.trips.insert_one({
+            "id": str(uuid.uuid4()),
+            "user_id": existing["id"],
+            "name": "Spiti Loop — Open Invite",
+            "start": {"name": "Shimla", "lat": 31.1048, "lng": 77.1734},
+            "end": {"name": "Manali", "lat": 32.2396, "lng": 77.1887},
+            "waypoints": [
+                {"name": "Kalpa", "lat": 31.5384, "lng": 78.2552},
+                {"name": "Kaza", "lat": 32.2257, "lng": 78.0716},
+            ],
+            "distance_km": 760,
+            "elevation_m": 4551,
+            "planned_date": (datetime.now(timezone.utc) + timedelta(days=21)).date().isoformat(),
+            "crew": ["Open"],
+            "notes": "8 days. Spiti circuit with acclimatisation day at Kaza.",
+            "is_public": True,
+            "max_riders": 8,
+            "description": "Eight days through the cold desert. Tar gives way to gravel after Reckong Peo. Riders should be comfortable on loose surfaces, carry their own basic spares, and have at least one Himalayan ride under their belt.",
+            "city": "Shimla",
+            "status": "planned",
+            "started_at": None, "ended_at": None,
+            "actual_distance_km": 0, "top_speed_kmh": 0, "duration_min": 0,
+            "created_at": now_iso(),
+        })
+
     logger.info("Seed complete. Admin: %s", admin_email)
 
 

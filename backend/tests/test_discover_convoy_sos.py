@@ -8,24 +8,28 @@ class TestDiscover:
     """Discover public trips tests"""
 
     def test_discover_returns_public_trips_only(self, base_url, api_client, auth_headers):
-        """Test GET /trips/discover returns only public trips"""
+        """Test GET /trips/discover returns only is_public + planned/active trips.
+        Uses show_all=true to bypass any home_city filter the admin user may have."""
         response = api_client.get(
-            f"{base_url}/api/trips/discover",
+            f"{base_url}/api/trips/discover?show_all=true",
             headers=auth_headers
         )
         assert response.status_code == 200, f"GET /trips/discover failed: {response.text}"
-        
+
         trips = response.json()
         assert isinstance(trips, list)
-        assert len(trips) == 1, f"Expected 1 public trip (Spiti Loop), got {len(trips)}"
-        
-        # Verify it's the Spiti Loop trip
-        public_trip = trips[0]
-        assert public_trip["name"] == "Spiti Loop — Open Invite"
-        assert public_trip["is_public"] is True
-        assert public_trip["status"] == "planned"
-        assert public_trip["distance_km"] == 760
-        assert public_trip["elevation_m"] == 4551
+        assert len(trips) >= 1, "Expected at least the seeded Spiti public trip"
+
+        # Every returned trip must honour the discover contract
+        for t in trips:
+            assert t["is_public"] is True, f"Non-public trip leaked into discover: {t['name']}"
+            assert t["status"] in ("planned", "active"), f"Wrong status: {t['status']}"
+
+        # Verify the seeded Spiti trip is present and well-formed
+        spiti = next((t for t in trips if t["name"] == "Spiti Loop — Open Invite"), None)
+        assert spiti is not None, "Seeded Spiti Loop trip is missing"
+        assert spiti["distance_km"] == 760
+        assert spiti["elevation_m"] == 4551
 
 
 class TestConvoy:

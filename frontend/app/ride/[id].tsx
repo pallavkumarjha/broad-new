@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Alert, StatusBar, Platform } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Alert, StatusBar, Platform, Animated } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
@@ -22,6 +22,7 @@ export default function LiveRide() {
   const [convoy, setConvoy] = useState<any>({ members: [], spread_km: 0 });
   const [progress, setProgress] = useState(0); // 0..1 along route
   const [speed, setSpeed] = useState(62);
+  const [displaySpeed, setDisplaySpeed] = useState(62);
   const [topSpeed, setTopSpeed] = useState(0);
   const [elapsed, setElapsed] = useState(0); // seconds
   const [gpsActive, setGpsActive] = useState(false);
@@ -32,6 +33,34 @@ export default function LiveRide() {
   const accelSub = useRef<any>(null);
   const lastAccel = useRef({ x: 0, y: 0, z: 0 });
   const crashHandled = useRef(false);
+  const speedAnim = useRef(new Animated.Value(62)).current;
+  const progressAnim = useRef(new Animated.Value(0)).current;
+
+  // Tween the rendered speed toward incoming telemetry so the readout lerps
+  // instead of jumping — 72px numerals read calmer when they ease.
+  useEffect(() => {
+    const id = speedAnim.addListener(({ value }) => {
+      setDisplaySpeed(Math.round(value));
+    });
+    return () => speedAnim.removeListener(id);
+  }, [speedAnim]);
+
+  useEffect(() => {
+    Animated.timing(speedAnim, {
+      toValue: speed,
+      duration: 420,
+      useNativeDriver: false,
+    }).start();
+  }, [speed, speedAnim]);
+
+  // Progress hairline — tween amber bar width across top of ride screen
+  useEffect(() => {
+    Animated.timing(progressAnim, {
+      toValue: progress,
+      duration: 600,
+      useNativeDriver: false,
+    }).start();
+  }, [progress, progressAnim]);
 
   useEffect(() => {
     (async () => {
@@ -248,6 +277,21 @@ export default function LiveRide() {
             <Eyebrow color={colors.dark.amber}>● LIVE — {trip.name.toUpperCase()} {gpsActive ? '· GPS' : '· SIM'}</Eyebrow>
             <TouchableOpacity onPress={endTrip} testID="ride-end-btn"><Meta style={{ color: colors.dark.amber }}>END</Meta></TouchableOpacity>
           </View>
+          {/* M2 — Ride progress hairline */}
+          <View style={styles.progressTrack} testID="ride-progress-track">
+            <Animated.View
+              testID="ride-progress-bar"
+              style={[
+                styles.progressBar,
+                {
+                  width: progressAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: ['0%', '100%'],
+                  }),
+                },
+              ]}
+            />
+          </View>
 
         <ScrollView contentContainerStyle={{ paddingBottom: space.xl }}>
           {/* Map */}
@@ -258,7 +302,7 @@ export default function LiveRide() {
           {/* Speedometer */}
           <View style={styles.speedoBlock}>
             <Meta style={{ color: colors.dark.inkMuted }}>SPEED — KM/H</Meta>
-            <Text testID="ride-speed-text" style={[type.instrument, { color: colors.dark.ink, marginTop: 4 }]}>{speed}</Text>
+            <Text testID="ride-speed-text" style={[type.instrument, { color: colors.dark.ink, marginTop: 4 }]}>{displaySpeed}</Text>
             <View style={styles.subRow}>
               <View><Meta style={{ color: colors.dark.inkMuted }}>TOP</Meta><Text style={[type.h2, { color: colors.dark.ink, marginTop: 2 }]}>{Math.round(topSpeed)}</Text></View>
               <View><Meta style={{ color: colors.dark.inkMuted }}>ELAPSED</Meta><Text style={[type.h2, { color: colors.dark.ink, fontFamily: fonts.mono, marginTop: 2 }]}>{fmtTime(elapsed)}</Text></View>
@@ -298,6 +342,8 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.dark.bg },
   center: { alignItems: 'center', justifyContent: 'center' },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: space.lg, paddingVertical: space.md, borderBottomWidth: 1, borderBottomColor: colors.dark.rule },
+  progressTrack: { height: 2, backgroundColor: 'rgba(217, 102, 6, 0.12)' },
+  progressBar: { height: 2, backgroundColor: colors.dark.amber },
   speedoBlock: { padding: space.lg, alignItems: 'flex-start', borderBottomWidth: 1, borderBottomColor: colors.dark.rule },
   subRow: { flexDirection: 'row', justifyContent: 'space-between', width: '100%', marginTop: space.lg, gap: space.lg },
   darkBlock: { padding: space.lg },

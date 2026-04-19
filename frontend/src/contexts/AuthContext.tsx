@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { Platform } from 'react-native';
-import { api, storage, TOKEN_KEY, formatErr } from '../lib/api';
+import { api, storage, TOKEN_KEY, REFRESH_TOKEN_KEY, formatErr } from '../lib/api';
 
 export type User = {
   id: string;
@@ -9,6 +9,7 @@ export type User = {
   bike: { make?: string; model?: string; registration?: string; odometer_km?: number };
   emergency_contacts: { name: string; phone: string; relation?: string }[];
   stats: { total_km: number; trips_completed: number; highest_point_m: number };
+  home_city?: string | null;
   created_at: string;
 };
 
@@ -67,6 +68,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const { data } = await api.post('/auth/login', { email, password });
       await storage.setItem(TOKEN_KEY, data.token);
+      if (data.refresh_token) await storage.setItem(REFRESH_TOKEN_KEY, data.refresh_token);
       setUser(data.user);
       _registerPushToken(); // fire-and-forget
     } catch (e: any) {
@@ -78,6 +80,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const { data } = await api.post('/auth/register', { email, password, name });
       await storage.setItem(TOKEN_KEY, data.token);
+      if (data.refresh_token) await storage.setItem(REFRESH_TOKEN_KEY, data.refresh_token);
       setUser(data.user);
       _registerPushToken(); // fire-and-forget
     } catch (e: any) {
@@ -86,7 +89,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const signOut = async () => {
+    // Best-effort server-side revocation so a stolen refresh token dies immediately
+    try {
+      const refreshToken = await storage.getItem(REFRESH_TOKEN_KEY);
+      if (refreshToken) await api.post('/auth/logout', { refresh_token: refreshToken });
+    } catch {}
     await storage.deleteItem(TOKEN_KEY);
+    await storage.deleteItem(REFRESH_TOKEN_KEY);
     setUser(null);
   };
 

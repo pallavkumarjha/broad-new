@@ -3,8 +3,8 @@ import { View, Text, StyleSheet, ScrollView, Switch, TouchableOpacity } from 're
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
-import { colors, type, space } from '../src/theme/tokens';
-import { Eyebrow, Rule, Card } from '../src/components/ui';
+import { colors, type, space, radius } from '../src/theme/tokens';
+import { Eyebrow, Rule, Card, Meta } from '../src/components/ui';
 import { useSettings } from '../src/contexts/SettingsContext';
 
 export default function Settings() {
@@ -45,6 +45,31 @@ export default function Settings() {
           <Eyebrow>FEEL</Eyebrow>
           <Card style={{ marginTop: space.sm }}>
             <Row label="Haptic feedback" sublabel="LIGHT TAPS ON ACTIONS" value={settings.haptics} onChange={(v: boolean) => update({ haptics: v })} testID="setting-haptics" />
+            <Rule />
+            <View style={styles.row}>
+              <View style={{ flex: 1 }}>
+                <Text style={[type.body, { color: colors.light.ink }]}>Units</Text>
+                <Text style={[type.meta, { color: colors.light.inkMuted, marginTop: 4 }]}>HOW SPEED, DISTANCE & ELEVATION READ</Text>
+              </View>
+              <View style={styles.segment}>
+                <TouchableOpacity
+                  testID="setting-units-metric"
+                  onPress={() => update({ units: 'metric' })}
+                  style={[styles.segmentBtn, settings.units === 'metric' && styles.segmentBtnOn]}
+                  activeOpacity={0.85}
+                >
+                  <Meta style={{ color: settings.units === 'metric' ? '#FFFFFF' : colors.light.ink }}>KM</Meta>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  testID="setting-units-imperial"
+                  onPress={() => update({ units: 'imperial' })}
+                  style={[styles.segmentBtn, settings.units === 'imperial' && styles.segmentBtnOn]}
+                  activeOpacity={0.85}
+                >
+                  <Meta style={{ color: settings.units === 'imperial' ? '#FFFFFF' : colors.light.ink }}>MI</Meta>
+                </TouchableOpacity>
+              </View>
+            </View>
           </Card>
         </View>
 
@@ -65,4 +90,10 @@ const styles = StyleSheet.create({
   header: { paddingHorizontal: space.lg, paddingVertical: space.md, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   section: { paddingHorizontal: space.lg, paddingTop: space.xl },
   row: { flexDirection: 'row', alignItems: 'center', paddingVertical: space.md, gap: space.md },
+  segment: {
+    flexDirection: 'row', borderWidth: 1, borderColor: colors.light.ink,
+    borderRadius: radius.tiny, overflow: 'hidden',
+  },
+  segmentBtn: { paddingVertical: 6, paddingHorizontal: 12, backgroundColor: 'transparent' },
+  segmentBtnOn: { backgroundColor: colors.light.ink },
 });

@@ -1,11 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ActivityIndicator, Animated, Easing } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import { api } from '../src/lib/api';
 import { colors, type, space, radius } from '../src/theme/tokens';
-import { Eyebrow, Button, Rule, Meta } from '../src/components/ui';
+import { Eyebrow, Button, Rule, Meta, ErrorStrip } from '../src/components/ui';
 import { MapView } from '../src/components/MapView';
 
 // Curated destination presets for India
@@ -37,6 +37,12 @@ export default function Plan() {
   const [notes, setNotes] = useState('');
   const [days, setDays] = useState(1);
   const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const [focused, setFocused] = useState<'name' | 'notes' | 'description' | null>(null);
+  // ---- Public trip ----
+  const [isPublic, setIsPublic] = useState(false);
+  const [maxRiders, setMaxRiders] = useState(8);
+  const [description, setDescription] = useState('');
   const [pickerFor, setPickerFor] = useState<'start' | 'end' | 'wp' | null>(null);
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<typeof PRESETS>(PRESETS);
@@ -47,6 +53,38 @@ export default function Plan() {
   const searchTimer = useRef<any>(null);
 
   const allPoints = useMemo(() => [start, ...waypoints, end], [start, end, waypoints]);
+
+  // M3 — spring the STOPS counter when waypoints change
+  const stopsAnim = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    stopsAnim.setValue(0.7);
+    Animated.spring(stopsAnim, {
+      toValue: 1,
+      friction: 4,
+      tension: 120,
+      useNativeDriver: true,
+    }).start();
+  }, [waypoints.length, stopsAnim]);
+
+  // M10 — picker translateY spring
+  const pickerAnim = useRef(new Animated.Value(0)).current;
+  const crewPickerAnim = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(pickerAnim, {
+      toValue: pickerFor ? 1 : 0,
+      duration: 260,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [pickerFor, pickerAnim]);
+  useEffect(() => {
+    Animated.timing(crewPickerAnim, {
+      toValue: crewPickerOpen ? 1 : 0,
+      duration: 260,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [crewPickerOpen, crewPickerAnim]);
 
   // Debounced Nominatim search
   useEffect(() => {
@@ -106,7 +144,7 @@ export default function Plan() {
   }, [crewQuery, crewPickerOpen]);
 
   const submit = async () => {
-    setBusy(true);
+    setErr(''); setBusy(true);
     try {
       const { data } = await api.post('/trips', {
         name, start, end, waypoints,
@@ -116,11 +154,14 @@ export default function Plan() {
         crew: crewList,
         crew_ids: crewIdsList,
         notes,
-        is_public: false,
+        is_public: isPublic,
+        max_riders: maxRiders,
+        description: isPublic ? description.trim() : '',
+        city: isPublic ? (start?.name?.split(',')[0]?.trim() || '') : '',
       });
       router.replace(`/trip/${data.id}`);
     } catch (e: any) {
-      alert(e?.response?.data?.detail || e.message);
+      setErr(e?.response?.data?.detail || e.message || 'Could not save trip');
     } finally { setBusy(false); }
   };
 
@@ -145,14 +186,15 @@ export default function Plan() {
               <Text style={[type.h2, { color: colors.light.ink, marginTop: 4 }]}>{elevMax ?? '—'}<Text style={type.meta}> M</Text></Text>
             </View>
             <View style={[styles.metric, { borderLeftWidth: 1, borderLeftColor: colors.light.rule, paddingLeft: space.md }]}>
-              <Meta>STOPS</Meta><Text style={[type.h2, { color: colors.light.ink, marginTop: 4 }]}>{waypoints.length + 2}</Text>
+              <Meta>STOPS</Meta>
+              <Animated.Text testID="plan-stops-count" style={[type.h2, { color: colors.light.ink, marginTop: 4, transform: [{ scale: stopsAnim }] }]}>{waypoints.length + 2}</Animated.Text>
             </View>
           </View>
           <Rule />
 
           <View style={styles.section}>
             <Eyebrow>TRIP NAME</Eyebrow>
-            <TextInput testID="plan-name-input" value={name} onChangeText={setName} style={styles.input} placeholderTextColor={colors.light.inkMuted} />
+            <TextInput testID="plan-name-input" value={name} onChangeText={setName} onFocus={() => setFocused('name')} onBlur={() => setFocused(null)} style={[styles.input, focused === 'name' && styles.inputFocused]} placeholderTextColor={colors.light.inkMuted} />
           </View>
 
           <View style={styles.section}>
@@ -217,27 +259,98 @@ export default function Plan() {
           </View>
 
           <View style={styles.section}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Eyebrow>OPEN INVITE — DISCOVER FEED</Eyebrow>
+              <TouchableOpacity
+                testID="plan-public-toggle"
+                onPress={() => setIsPublic(v => !v)}
+                style={[styles.toggle, isPublic && styles.toggleOn]}
+                activeOpacity={0.85}
+              >
+                <View style={[styles.toggleKnob, isPublic && styles.toggleKnobOn]} />
+              </TouchableOpacity>
+            </View>
+            <Text style={[type.body, { color: colors.light.inkMuted, marginTop: space.xs }]}>
+              {isPublic
+                ? "This ride will appear in Discover. Other riders can request to join — you decide who's in."
+                : "Private — only the crew you've added will see it."}
+            </Text>
+
+            {isPublic && (
+              <View testID="plan-public-fields" style={{ marginTop: space.lg }}>
+                <Eyebrow>MAX RIDERS — INCLUDING YOU</Eyebrow>
+                <View style={styles.daysRow}>
+                  <TouchableOpacity
+                    testID="plan-max-riders-minus"
+                    onPress={() => setMaxRiders(Math.max(2, maxRiders - 1))}
+                    style={styles.daysBtn}
+                  >
+                    <Feather name="minus" size={16} color={colors.light.ink} />
+                  </TouchableOpacity>
+                  <Text style={[type.h1, { color: colors.light.ink, minWidth: 40, textAlign: 'center' }]}>{maxRiders}</Text>
+                  <TouchableOpacity
+                    testID="plan-max-riders-plus"
+                    onPress={() => setMaxRiders(Math.min(50, maxRiders + 1))}
+                    style={styles.daysBtn}
+                  >
+                    <Feather name="plus" size={16} color={colors.light.ink} />
+                  </TouchableOpacity>
+                  <Meta style={{ marginLeft: space.md }}>
+                    {1 + crewList.length} CONFIRMED · {Math.max(0, maxRiders - 1 - crewList.length)} SEATS LEFT
+                  </Meta>
+                </View>
+
+                <View style={{ marginTop: space.lg }}>
+                  <Eyebrow>WHAT'S THIS RIDE ABOUT</Eyebrow>
+                  <TextInput
+                    testID="plan-description-input"
+                    value={description}
+                    onChangeText={setDescription}
+                    onFocus={() => setFocused('description')}
+                    onBlur={() => setFocused(null)}
+                    multiline
+                    numberOfLines={3}
+                    maxLength={500}
+                    placeholder="The pitch — pace, terrain, who'd enjoy it, what to bring."
+                    placeholderTextColor={colors.light.inkMuted}
+                    style={[styles.input, { minHeight: 90, textAlignVertical: 'top' }, focused === 'description' && styles.inputFocused]}
+                  />
+                  <Meta style={{ marginTop: 4, color: colors.light.inkMuted }}>{description.length}/500</Meta>
+                </View>
+              </View>
+            )}
+          </View>
+
+          <View style={styles.section}>
             <Eyebrow>PACKING NOTES</Eyebrow>
             <TextInput
               testID="plan-notes-input"
               value={notes}
               onChangeText={setNotes}
+              onFocus={() => setFocused('notes')}
+              onBlur={() => setFocused(null)}
               multiline
               numberOfLines={3}
               placeholder="Rain liners, fuel at Mysuru, …"
               placeholderTextColor={colors.light.inkMuted}
-              style={[styles.input, { minHeight: 80, textAlignVertical: 'top' }]}
+              style={[styles.input, { minHeight: 80, textAlignVertical: 'top' }, focused === 'notes' && styles.inputFocused]}
             />
           </View>
 
           <View style={[styles.section, { paddingTop: space.xl }]}>
+            {err ? (
+              <ErrorStrip testID="plan-error" title="COULD NOT SAVE" message={err} style={{ marginBottom: space.md }} />
+            ) : null}
             <Button label="SAVE TRIP" onPress={submit} loading={busy} testID="plan-save-button" />
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
 
       {crewPickerOpen && (
-        <View style={styles.picker}>
+        <Animated.View style={[styles.picker, {
+          transform: [{ translateY: crewPickerAnim.interpolate({ inputRange: [0, 1], outputRange: [600, 0] }) }],
+          opacity: crewPickerAnim,
+        }]}>
           <View style={styles.pickerHead}>
             <Eyebrow>ADD RIDER — SEARCH OR TYPE NAME</Eyebrow>
             <TouchableOpacity onPress={() => { setCrewPickerOpen(false); setCrewQuery(''); }} testID="plan-crew-picker-close"><Feather name="x" size={20} color={colors.light.ink} /></TouchableOpacity>
@@ -293,10 +406,13 @@ export default function Plan() {
               </View>
             )}
           </ScrollView>
-        </View>
+        </Animated.View>
       )}
       {pickerFor && (
-        <View style={styles.picker}>
+        <Animated.View style={[styles.picker, {
+          transform: [{ translateY: pickerAnim.interpolate({ inputRange: [0, 1], outputRange: [600, 0] }) }],
+          opacity: pickerAnim,
+        }]}>
           <View style={styles.pickerHead}>
             <Eyebrow>SEARCH ANY PLACE IN INDIA</Eyebrow>
             <TouchableOpacity onPress={() => { setPickerFor(null); setQuery(''); }} testID="plan-picker-close"><Feather name="x" size={20} color={colors.light.ink} /></TouchableOpacity>
@@ -336,7 +452,7 @@ export default function Plan() {
               </TouchableOpacity>
             ))}
           </ScrollView>
-        </View>
+        </Animated.View>
       )}
     </SafeAreaView>
   );
@@ -354,6 +470,7 @@ const styles = StyleSheet.create({
     fontFamily: 'Fraunces_400Regular', fontSize: 16, color: colors.light.ink,
     backgroundColor: '#FFFFFF', borderRadius: radius.tiny,
   },
+  inputFocused: { borderColor: colors.light.amber, borderWidth: 1.5 },
   pickRow: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     paddingVertical: space.md, borderBottomWidth: 1, borderBottomColor: colors.light.rule,
@@ -378,4 +495,16 @@ const styles = StyleSheet.create({
   },
   daysRow: { flexDirection: 'row', alignItems: 'center', marginTop: space.sm, gap: 12 },
   daysBtn: { borderWidth: 1, borderColor: colors.light.ink, width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: radius.tiny },
+  toggle: {
+    width: 44, height: 26, borderRadius: 13,
+    borderWidth: 1, borderColor: colors.light.rule,
+    backgroundColor: colors.light.surface,
+    justifyContent: 'center', paddingHorizontal: 2,
+  },
+  toggleOn: { backgroundColor: colors.light.amber, borderColor: colors.light.amber },
+  toggleKnob: {
+    width: 20, height: 20, borderRadius: 10,
+    backgroundColor: colors.light.ink,
+  },
+  toggleKnobOn: { backgroundColor: '#FFFFFF', alignSelf: 'flex-end' },
 });

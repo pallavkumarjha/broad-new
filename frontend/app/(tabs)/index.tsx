@@ -1,5 +1,5 @@
-import React, { useCallback, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl } from 'react-native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, useWindowDimensions, Animated } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
@@ -8,12 +8,14 @@ import { api } from '../../src/lib/api';
 import { colors, type, space, radius, fonts } from '../../src/theme/tokens';
 import { Eyebrow, Card, Rule, Meta } from '../../src/components/ui';
 import { FIELD_NOTES, pickFromSeed } from '../../src/lib/content';
+import { EmptyRoadIllus } from '../../src/components/illustrations';
 
 type Trip = any;
 
 export default function Home() {
   const { user } = useAuth();
   const router = useRouter();
+  const { width } = useWindowDimensions();
   const [trips, setTrips] = useState<Trip[]>([]);
   const [active, setActive] = useState<Trip | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -41,18 +43,35 @@ export default function Home() {
 
   const upcoming = trips.filter(t => t.status === 'planned').slice(0, 3);
 
+  // M6 — pulse the live dot on the active trip card
+  const dotBlink = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    if (!active) return;
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(dotBlink, { toValue: 0.2, duration: 600, useNativeDriver: true }),
+        Animated.timing(dotBlink, { toValue: 1, duration: 600, useNativeDriver: true }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [active, dotBlink]);
+
   return (
     <SafeAreaView style={styles.container} edges={['top']} testID="home-screen">
       <ScrollView contentContainerStyle={{ paddingBottom: space.xxl }} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.light.ink} />}>
         <View style={styles.header}>
-          <Eyebrow>{greet().toUpperCase()} — {new Date().toDateString().toUpperCase()}</Eyebrow>
+          <Eyebrow>TODAY — {greet().toUpperCase()} · {new Date().toDateString().toUpperCase()}</Eyebrow>
           <Text style={[type.h1, { color: colors.light.ink, marginTop: space.xs }]}>{user?.name || 'Rider'}.</Text>
         </View>
 
         {active && (
           <TouchableOpacity testID="active-trip-card" activeOpacity={0.9} onPress={() => router.push(`/ride/${active.id}`)} style={styles.activeWrap}>
             <View style={styles.activeCard}>
-              <Eyebrow color={colors.dark.amber}>● TRIP IN PROGRESS</Eyebrow>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Animated.View style={[styles.liveDot, { opacity: dotBlink }]} testID="active-trip-dot" />
+                <Eyebrow color={colors.dark.amber}>TRIP IN PROGRESS</Eyebrow>
+              </View>
               <Text style={[type.h2, { color: colors.dark.ink, marginTop: space.xs }]}>{active.name}</Text>
               <Text style={[type.meta, { color: colors.dark.inkMuted, marginTop: space.sm }]}>
                 {active.distance_km} KM · {active.crew?.length || 0} CREW · TAP TO OPEN INSTRUMENT PANEL
@@ -84,8 +103,11 @@ export default function Home() {
           </View>
           <Rule style={{ marginTop: space.sm }} />
           {upcoming.length === 0 ? (
-            <View style={{ paddingVertical: space.xl }}>
-              <Text style={[type.body, { color: colors.light.inkMuted }]}>No trips on the horizon. Plot one.</Text>
+            <View style={styles.emptyUpcoming}>
+              <EmptyRoadIllus width={width - space.lg * 2} height={130} />
+              <Text style={[type.body, { color: colors.light.inkMuted, marginTop: space.md }]}>
+                No trips on the horizon. Plot one.
+              </Text>
             </View>
           ) : upcoming.map((t, i) => (
             <TouchableOpacity key={t.id} testID={`upcoming-trip-${i}`} onPress={() => router.push(`/trip/${t.id}`)} style={styles.tripRow} activeOpacity={0.7}>
@@ -101,7 +123,10 @@ export default function Home() {
         </View>
 
         <View style={styles.section}>
-          <Eyebrow>FIELD NOTE</Eyebrow>
+          <View style={styles.sectionHead}>
+            <Eyebrow>FIELD NOTE</Eyebrow>
+            <Meta>TODAY'S NOTE · CHANGES DAILY</Meta>
+          </View>
           <Card style={{ marginTop: space.sm }}>
             {(() => {
               const note = pickFromSeed(FIELD_NOTES, new Date().toDateString() + (user?.id || ''));
@@ -141,4 +166,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.dark.bg, padding: space.lg,
     borderRadius: radius.tiny, borderWidth: 1, borderColor: colors.dark.rule,
   },
+  liveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.dark.amber },
+  emptyUpcoming: { paddingVertical: space.md, alignItems: 'flex-start' },
 });
