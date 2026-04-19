@@ -41,7 +41,12 @@ export default function SOS() {
 
   const resolve = async () => {
     try { await api.post(`/sos/${id}/resolve`); } catch {}
-    router.replace(`/sos/safe/${id}`);
+    Alert.alert(
+      'You are marked safe',
+      'Your convoy and emergency contacts have been notified.',
+      [{ text: 'Back to home', onPress: () => router.replace('/(tabs)') }],
+      { cancelable: false }
+    );
   };
 
   return (
@@ -66,7 +71,7 @@ export default function SOS() {
 
           <View style={styles.statBlock}>
             <SpecRow dark label="STATUS" value="ACTIVE" />
-            <SpecRow dark label="LOCATION" value={event ? `${event.lat.toFixed(3)}°N ${event.lng.toFixed(3)}°E` : '— —'} />
+            <SpecRow dark label="LOCATION" value={event?.lat != null ? `${event.lat.toFixed(3)}°N ${event.lng.toFixed(3)}°E` : '— —'} />
             <SpecRow dark label="SPEED" value={event ? `${Math.round(event.speed_kmh)} KM/H` : '0 KM/H'} />
             <SpecRow dark label="SENT TO" value="CONVOY · CONTACTS" last />
           </View>

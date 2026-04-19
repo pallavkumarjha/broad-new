@@ -136,6 +136,7 @@ export default function Discover() {
           const taken = 1 + (r.crew_ids?.length || 0); // organiser + confirmed crew
           const seatsLeft = Math.max(0, max - taken);
           const reqStatus = requestState[r.id];
+          const isOwnTrip = meQuery.data?.id && r.user_id === meQuery.data.id;
           const isFull = seatsLeft <= 0;
           const ctaLabel =
             joining === r.id ? 'SENDING…' :
@@ -169,6 +170,15 @@ export default function Discover() {
                     {isFull ? 'FULL' : `${seatsLeft} SEAT${seatsLeft === 1 ? '' : 'S'} LEFT`}
                   </Text>
                 </View>
+                {/* "Your ride" badge — bottom left, only shown to the organiser */}
+                {isOwnTrip ? (
+                  <View style={styles.ownBadge} testID={`discover-own-badge-${i}`}>
+                    <Feather name="star" size={9} color={colors.light.amber} />
+                    <Text style={[type.meta, { color: colors.light.amber, marginLeft: 4, letterSpacing: 0.8 }]}>
+                      YOUR RIDE
+                    </Text>
+                  </View>
+                ) : null}
               </View>
               <View style={styles.cardBody}>
                 <Eyebrow>{(r.planned_date || 'TBD').toUpperCase()}</Eyebrow>
@@ -224,6 +234,13 @@ const styles = StyleSheet.create({
   joinBtnPending: { backgroundColor: colors.light.surface, borderWidth: 1, borderColor: colors.light.amber },
   seatsTag: { left: undefined, right: space.sm },
   seatsTagFull: { backgroundColor: 'rgba(178,42,42,0.85)' },
+  ownBadge: {
+    position: 'absolute', bottom: space.sm, left: space.sm,
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: 'rgba(28,27,26,0.82)',
+    paddingVertical: 4, paddingHorizontal: 8, borderRadius: 2,
+    borderWidth: 1, borderColor: colors.light.amber,
+  },
   filterStrip: {
     flexDirection: 'row', alignItems: 'center',
     marginHorizontal: space.lg, marginVertical: space.sm,

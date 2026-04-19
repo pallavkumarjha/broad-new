@@ -1,5 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Alert, StatusBar, Platform, Animated } from 'react-native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Alert, StatusBar, Platform, Animated, useWindowDimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
@@ -35,6 +35,35 @@ export default function LiveRide() {
   const crashHandled = useRef(false);
   const speedAnim = useRef(new Animated.Value(62)).current;
   const progressAnim = useRef(new Animated.Value(0)).current;
+  // Refs so triggerSos (defined via useCallback below) always has fresh values
+  // even when called from long-lived effects (crash detection, auto-SOS timer).
+  const liveMarkerRef = useRef<{ lat: number; lng: number }>({ lat: 0, lng: 0 });
+  const speedRef = useRef(62);
+  // Tracks whether GPS is actually delivering valid speed values. When false the
+  // mock tick keeps running so the instrument panel stays alive.
+  const gpsSpeedActiveRef = useRef(false);
+
+  // Keep speedRef in sync so triggerSos always has the latest reading.
+  useEffect(() => { speedRef.current = speed; }, [speed]);
+
+  // triggerSos is defined here (before the early return) so the crash-detection
+  // effect always captures a valid, stable reference. It reads liveMarkerRef and
+  // speedRef which are kept up-to-date via refs rather than stale closures.
+  const triggerSos = useCallback(async () => {
+    try {
+      const pos = liveMarkerRef.current;
+      const { data } = await api.post('/sos', {
+        trip_id: id,
+        lat: pos.lat,
+        lng: pos.lng,
+        speed_kmh: speedRef.current,
+        heading_deg: 0,
+      });
+      router.replace(`/sos/${data.id}`);
+    } catch (e: any) {
+      Alert.alert('SOS failed to send', e?.response?.data?.detail || e?.message || 'Network error');
+    }
+  }, [id, router]);
 
   // Tween the rendered speed toward incoming telemetry so the readout lerps
   // instead of jumping — 72px numerals read calmer when they ease.
@@ -71,12 +100,17 @@ export default function LiveRide() {
     })();
   }, [id]);
 
-  // Mock telemetry tick (falls back when GPS inactive)
+  // Mock telemetry tick. Progress simulation stops once real GPS kicks in.
+  // Speed simulation keeps running until the device actually reports a valid
+  // speed value — many phones return -1 / null for coords.speed even when
+  // location is active (especially at low speeds or indoors).
   useEffect(() => {
     const t = setInterval(() => {
       setElapsed(Math.floor((Date.now() - startedAt.current) / 1000));
       if (!gpsActive) {
         setProgress(p => Math.min(1, p + 0.0015));
+      }
+      if (!gpsSpeedActiveRef.current) {
         setSpeed(s => {
           const ns = Math.max(0, Math.min(120, s + (Math.random() - 0.5) * 18));
           setTopSpeed(ts => Math.max(ts, ns));
@@ -99,9 +133,14 @@ export default function LiveRide() {
                 if (cancelled) return;
                 setGpsActive(true);
                 setRealPos({ lat: pos.coords.latitude, lng: pos.coords.longitude });
-                const sp = Math.round((pos.coords.speed || 0) * 3.6);
-                setSpeed(sp);
-                setTopSpeed(ts => Math.max(ts, sp));
+                // coords.speed is null on many browsers — only use it when valid.
+                const raw = pos.coords.speed ?? -1;
+                if (raw >= 0) {
+                  const sp = Math.round(raw * 3.6);
+                  gpsSpeedActiveRef.current = true;
+                  setSpeed(sp);
+                  setTopSpeed(ts => Math.max(ts, sp));
+                }
               },
               () => {},
               { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 }
@@ -117,9 +156,15 @@ export default function LiveRide() {
                 if (cancelled) return;
                 setGpsActive(true);
                 setRealPos({ lat: pos.coords.latitude, lng: pos.coords.longitude });
-                const sp = Math.round((pos.coords.speed || 0) * 3.6);
-                setSpeed(Math.max(0, sp));
-                setTopSpeed(ts => Math.max(ts, sp));
+                // On iOS coords.speed is -1 when unknown; on Android it can be
+                // null. Only switch off the mock once we get a valid reading.
+                const raw = pos.coords.speed ?? -1;
+                if (raw >= 0) {
+                  const sp = Math.round(raw * 3.6);
+                  gpsSpeedActiveRef.current = true;
+                  setSpeed(Math.max(0, sp));
+                  setTopSpeed(ts => Math.max(ts, sp));
+                }
               }
             );
           }
@@ -223,18 +268,24 @@ export default function LiveRide() {
     })();
   }, [id]);
 
+  const { width: screenWidth } = useWindowDimensions();
+
   if (!trip) {
     return <View style={[styles.container, styles.center]}><ActivityIndicator color={colors.dark.amber} /></View>;
   }
 
-  const allPoints = [trip.start, ...(trip.waypoints || []), trip.end];
+  const allPoints = [trip.start, ...(trip.waypoints || []), trip.end].filter(Boolean);
   // interpolate position (fallback) or use real GPS
-  const segs = allPoints.length - 1;
+  const segs = Math.max(1, allPoints.length - 1);
   const segLen = 1 / segs;
   const segIdx = Math.min(segs - 1, Math.floor(progress / segLen));
   const segT = (progress - segIdx * segLen) / segLen;
-  const a = allPoints[segIdx], b = allPoints[segIdx + 1];
+  const a = allPoints[segIdx] ?? { lat: 0, lng: 0 };
+  const b = allPoints[segIdx + 1] ?? a;
   const liveMarker = realPos || { lat: a.lat + (b.lat - a.lat) * segT, lng: a.lng + (b.lng - a.lng) * segT };
+  // Keep ref in sync so triggerSos always has the latest position without
+  // needing to be in the effect deps array.
+  liveMarkerRef.current = liveMarker;
 
   const fmtTime = (s: number) => {
     const h = Math.floor(s / 3600).toString().padStart(2, '0');
@@ -244,17 +295,6 @@ export default function LiveRide() {
   };
 
   const distanceCovered = (trip.distance_km * progress).toFixed(1);
-
-  const triggerSos = async () => {
-    try {
-      const { data } = await api.post('/sos', {
-        trip_id: id, lat: liveMarker.lat, lng: liveMarker.lng, speed_kmh: speed, heading_deg: 0,
-      });
-      router.replace(`/sos/${data.id}`);
-    } catch (e: any) {
-      Alert.alert('SOS failed to send', e?.message || 'Network error');
-    }
-  };
 
   const endTrip = async () => {
     try {
@@ -296,7 +336,7 @@ export default function LiveRide() {
         <ScrollView contentContainerStyle={{ paddingBottom: space.xl }}>
           {/* Map */}
           <View style={{ alignItems: 'center', paddingTop: space.sm }}>
-            <MapView points={allPoints} dark width={360} height={200} liveMarker={liveMarker} />
+            <MapView points={allPoints} dark width={screenWidth} height={300} liveMarker={liveMarker} />
           </View>
 
           {/* Speedometer */}
