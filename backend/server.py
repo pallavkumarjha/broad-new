@@ -74,8 +74,15 @@ def get_jwt_secret() -> str:
 
 
 # ---------- Helpers ----------
+# bcrypt work factor. 10 rounds ≈ 2025-safe for interactive logins and is ~4×
+# faster than the library default of 12 — a meaningful latency win on Railway's
+# free-tier CPU (bcrypt is the single dominant cost of /auth/login and
+# /auth/register). Raise to 12+ only after moving off shared CPU.
+BCRYPT_ROUNDS = 10
+
+
 def hash_password(p: str) -> str:
-    return bcrypt.hashpw(p.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    return bcrypt.hashpw(p.encode("utf-8"), bcrypt.gensalt(rounds=BCRYPT_ROUNDS)).decode("utf-8")
 
 
 def verify_password(plain: str, hashed: str) -> bool:

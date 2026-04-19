@@ -1,0 +1,34 @@
+name: Railway keep-alive
+
+# Why:
+# Railway's free tier puts containers to sleep after ~10 min of zero traffic.
+# Waking one up takes 8–30s, which users experience as a laggy first tap.
+# This workflow pings the public root every 5 minutes to keep the container hot.
+#
+# Cost: ~1500 GH Actions minutes/month (well under the 2000-min free quota on
+# private repos, unlimited on public repos).
+#
+# Safety: the ping is unauthenticated and hits GET / — no side effects. If the
+# service is down, the step fails and GitHub sends an email to the repo owner,
+# which is a useful free uptime monitor as a side effect.
+
+on:
+  schedule:
+    - cron: '*/5 * * * *' # every 5 minutes (GH minimum)
+  workflow_dispatch: # allow manual kick from the Actions tab
+
+concurrency:
+  # If a run is already in flight, skip new ones. Keeps the worker lean.
+  group: keepalive
+  cancel-in-progress: false
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Ping Railway backend
+        run: |
+          URL="https://broad-backend-production.up.railway.app/api/"
+          # -f: fail on non-2xx, --max-time 45: forgive a cold start
+          curl -fsS --max-time 45 -o /dev/null -w "HTTP %{http_code} in %{time_total}s\n" "$URL"

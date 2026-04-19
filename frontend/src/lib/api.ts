@@ -31,9 +31,13 @@ async function deleteItem(key: string) {
 
 export const storage = { setItem, getItem, deleteItem };
 
+// 45s: forgives Railway free-tier cold starts (can be 8–30s on first hit after
+// the container sleeps). A shorter timeout caused a bad failure mode where users
+// would see a generic error, tap again, and the duplicate register/request would
+// trip the server-side rate limit while the first call was actually succeeding.
 export const api = axios.create({
   baseURL: `${BASE}/api`,
-  timeout: 20000,
+  timeout: 45000,
 });
 
 api.interceptors.request.use(async (config) => {
