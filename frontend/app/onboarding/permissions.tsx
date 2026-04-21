@@ -58,7 +58,7 @@ export default function Permissions() {
     setCrash('granted');
   };
 
-  const done = () => router.replace('/profile/edit?onboarding=1');
+  const done = () => router.push('/onboarding/rider-name');
 
   const grantedCount = [loc, notif, crash].filter(s => s === 'granted').length;
 
