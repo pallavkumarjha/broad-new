@@ -1,9 +1,10 @@
 import React, { useState, useCallback } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  TextInput, Platform, Alert, KeyboardAvoidingView, Image,
+  TextInput, Platform, Alert, KeyboardAvoidingView,
   ActionSheetIOS, Linking,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
@@ -276,7 +277,11 @@ export default function Glovebox() {
       if (result.canceled || !result.assets?.length) return;
 
       const asset = result.assets[0];
-      const ext   = (asset.uri.split('.').pop() || 'jpg').toLowerCase();
+      // Derive extension from mimeType first (most reliable), then URI, then default to jpg.
+      // asset.uri on Android can be a content:// URI with no extension in the path.
+      const ext = asset.mimeType
+        ? asset.mimeType.split('/')[1]?.replace('jpeg', 'jpg') || 'jpg'
+        : (asset.uri.split('.').pop()?.split('?')[0] || 'jpg').toLowerCase();
       const name  = asset.fileName || `document.${ext}`;
 
       let finalUri = asset.uri;
@@ -434,7 +439,7 @@ export default function Glovebox() {
 
         {/* Thumbnail strip if image attached */}
         {attach?.kind === 'image' && (
-          <Image source={{ uri: attach.uri }} style={s.thumbStrip} resizeMode="cover" />
+          <Image source={{ uri: attach.uri }} style={s.thumbStrip} contentFit="cover" />
         )}
       </TouchableOpacity>
     );
@@ -488,7 +493,7 @@ export default function Glovebox() {
         {current ? (
           <>
             {current.kind === 'image' ? (
-              <Image source={{ uri: current.uri }} style={s.attachPreview} resizeMode="contain" />
+              <Image source={{ uri: current.uri }} style={s.attachPreview} contentFit="contain" />
             ) : (
               <TouchableOpacity style={s.pdfRow} onPress={() => openAttachment(current)}>
                 <Feather name="file-text" size={20} color={colors.light.amber} />

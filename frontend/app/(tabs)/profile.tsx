@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
@@ -9,9 +9,13 @@ import { queryClient } from '../../src/lib/queryClient';
 import { colors, type, space } from '../../src/theme/tokens';
 import { Eyebrow, Rule, SpecRow, Card, Meta, Button } from '../../src/components/ui';
 
-// Curated city list from plan.tsx
+// Top 20 most-populated Indian cities (city proper, 2024 estimates) + Other.
 const CITIES = [
-  'Bangalore', 'Mysuru', 'Coorg', 'Manali', 'Leh', 'Spiti', 'Goa', 'Pondicherry', 'Shimla'
+  'Mumbai', 'Delhi', 'Bengaluru', 'Hyderabad', 'Ahmedabad',
+  'Chennai', 'Kolkata', 'Surat', 'Pune', 'Jaipur',
+  'Lucknow', 'Kanpur', 'Nagpur', 'Indore', 'Thane',
+  'Bhopal', 'Visakhapatnam', 'Pimpri-Chinchwad', 'Patna', 'Vadodara',
+  'Other',
 ];
 
 export default function Profile() {
@@ -19,7 +23,10 @@ export default function Profile() {
   const router = useRouter();
   const [badges, setBadges] = useState<any[]>([]);
   const [cityPickerOpen, setCityPickerOpen] = useState(false);
-  const [saving, setSaving] = useState(false);
+  // savingCity tracks which city is being persisted so the card shows a spinner.
+  // optimisticCity drives the display while refresh() is still in-flight.
+  const [savingCity, setSavingCity] = useState(false);
+  const [optimisticCity, setOptimisticCity] = useState<string | null | undefined>(undefined);
 
   useFocusEffect(
     React.useCallback(() => {
@@ -29,17 +36,25 @@ export default function Profile() {
     }, [])
   );
 
+  // Derived display value — shows the optimistic city while the network call
+  // is in-flight, then falls back to the confirmed value from AuthContext.
+  const displayCity = optimisticCity !== undefined ? optimisticCity : user?.home_city;
+
   const setHomeCity = async (city: string | null) => {
-    setSaving(true);
+    // Close immediately so the tap feels instant, then save in background.
+    setCityPickerOpen(false);
+    setOptimisticCity(city);
+    setSavingCity(true);
     try {
       await api.patch('/users/me', { home_city: city });
-      await refresh(); // pull fresh /auth/me so user.home_city updates in-context
-      // Home city drives the Discover filter — invalidate both caches.
+      await refresh(); // updates user.home_city in AuthContext
+      setOptimisticCity(undefined); // hand off to real value now that refresh is done
       queryClient.invalidateQueries({ queryKey: ['auth', 'me'] });
       queryClient.invalidateQueries({ queryKey: ['trips', 'discover'] });
     } catch (e: any) {
+      setOptimisticCity(undefined); // revert display to last confirmed value
       Alert.alert('Could not save home city', e?.response?.data?.detail || e?.message || 'Please try again.');
-    } finally { setSaving(false); setCityPickerOpen(false); }
+    } finally { setSavingCity(false); }
   };
 
   if (!user) return null;
@@ -124,15 +139,17 @@ export default function Profile() {
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={[type.h3, { color: colors.light.ink }]}>
-                  {user.home_city || 'Not set'}
+                  {displayCity || 'Not set'}
                 </Text>
                 <Meta style={{ marginTop: 2 }}>
-                  {user.home_city
+                  {displayCity
                     ? "TAP TO CHANGE — You'll see rides from here in Discover"
                     : 'SET YOUR CITY — See only trips starting near you'}
                 </Meta>
               </View>
-              <Feather name="chevron-right" size={18} color={colors.light.inkMuted} />
+              {savingCity
+                ? <ActivityIndicator size="small" color={colors.light.inkMuted} />
+                : <Feather name="chevron-right" size={18} color={colors.light.inkMuted} />}
             </View>
           </TouchableOpacity>
         </View>
@@ -222,7 +239,7 @@ export default function Profile() {
                   style={styles.cityOption}
                   onPress={() => setHomeCity(city)}
                   activeOpacity={0.85}
-                  disabled={saving}
+                  disabled={savingCity}
                 >
                   <View style={{ flex: 1 }}>
                     <Text style={[type.body, { color: user.home_city === city ? colors.light.ink : colors.light.inkMuted, fontFamily: user.home_city === city ? 'Fraunces_500Medium' : undefined }]}>
