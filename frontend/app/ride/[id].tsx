@@ -228,7 +228,7 @@ export default function LiveRide() {
                 `${d.sender} has triggered an SOS. They may need help.`,
                 [
                   { text: 'Dismiss', style: 'cancel' },
-                  { text: 'View SOS', onPress: () => router.push(`/sos/${d.sos_id}` as any) },
+                  { text: 'View SOS', onPress: () => router.push(`/sos/respond/${d.sos_id}` as any) },
                 ],
                 { cancelable: false }
               );

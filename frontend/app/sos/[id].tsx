@@ -4,8 +4,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { api, describeError } from '../../src/lib/api';
 import { colors, type, space, fonts } from '../../src/theme/tokens';
-import { Eyebrow, Meta, SpecRow, ErrorStrip } from '../../src/components/ui';
+import { Eyebrow, Meta, SpecRow, ErrorStrip, Button } from '../../src/components/ui';
 import { SafeButton } from '../../src/components/SOSButton';
+
+const fmtCoord = (value: number, pos: string, neg: string) => `${Math.abs(value).toFixed(3)}°${value >= 0 ? pos : neg}`;
 
 export default function SOS() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -13,6 +15,7 @@ export default function SOS() {
   const [event, setEvent] = useState<any>(null);
   const [resolving, setResolving] = useState(false);
   const [resolveErr, setResolveErr] = useState('');
+  const [loadErr, setLoadErr] = useState('');
   const blink = useRef(new Animated.Value(0.3)).current;
   const pulse = useRef(new Animated.Value(0)).current;
 
@@ -34,10 +37,12 @@ export default function SOS() {
   useEffect(() => {
     (async () => {
       try {
-        // get the active SOS by id (mocked via my-active-sos)
+        setLoadErr('');
         const { data } = await api.get('/sos/active');
         setEvent(data);
-      } catch {}
+      } catch (e: any) {
+        setLoadErr(describeError(e, 'Could not load SOS details.'));
+      }
     })();
   }, [id]);
 
@@ -54,6 +59,10 @@ export default function SOS() {
     }
   };
 
+  const locationText = event?.lat != null ? `${fmtCoord(event.lat, 'N', 'S')} ${fmtCoord(event.lng, 'E', 'W')}` : '— —';
+  const showLoading = !event && !loadErr;
+  const showLoadError = !event && !!loadErr;
+
   return (
     <View style={styles.container} testID="sos-active-screen">
       <StatusBar barStyle="light-content" />
@@ -69,24 +78,49 @@ export default function SOS() {
         </View>
 
         <View style={styles.body}>
-          <Text style={[type.display, { color: colors.dark.ink }]}>Help is on the way.</Text>
-          <Text style={[type.bodyLg, { color: colors.dark.inkMuted, marginTop: space.sm }]}>
-            Your location, heading and speed are being broadcast to your convoy.
-          </Text>
+          {showLoading ? (
+            <View style={styles.loadingBlock}>
+              <Text style={[type.bodyLg, { color: colors.dark.inkMuted }]}>Loading SOS details…</Text>
+            </View>
+          ) : showLoadError ? (
+            <View style={styles.loadingBlock}>
+              <ErrorStrip
+                testID="sos-load-error"
+                title="COULD NOT LOAD SOS"
+                message={loadErr}
+                style={{ width: '100%' }}
+              />
+              <Button
+                dark
+                variant="ghost"
+                label="BACK TO RIDE"
+                onPress={() => router.back()}
+                style={{ marginTop: space.lg, alignSelf: 'stretch' }}
+                testID="sos-load-back-btn"
+              />
+            </View>
+          ) : (
+            <>
+              <Text style={[type.display, { color: colors.dark.ink }]}>Help is on the way.</Text>
+              <Text style={[type.bodyLg, { color: colors.dark.inkMuted, marginTop: space.sm }]}>
+                Your location, heading and speed are being broadcast to your convoy.
+              </Text>
 
-          <View style={styles.statBlock}>
-            <SpecRow dark label="STATUS" value="ACTIVE" />
-            <SpecRow dark label="LOCATION" value={event?.lat != null ? `${event.lat.toFixed(3)}°N ${event.lng.toFixed(3)}°E` : '— —'} />
-            <SpecRow dark label="SPEED" value={event ? `${Math.round(event.speed_kmh)} KM/H` : '0 KM/H'} />
-            <SpecRow dark label="SENT TO" value="CONVOY" last />
-          </View>
+              <View style={styles.statBlock}>
+                <SpecRow dark label="STATUS" value="ACTIVE" />
+                <SpecRow dark label="LOCATION" value={locationText} />
+                <SpecRow dark label="SPEED" value={event ? `${Math.round(event.speed_kmh)} KM/H` : '0 KM/H'} />
+                <SpecRow dark label="SENT TO" value="CONVOY" last />
+              </View>
 
-          <View style={styles.list}>
-            <Meta style={{ color: colors.dark.inkMuted }}>BROADCAST LOG</Meta>
-            <Text style={[type.body, { color: colors.dark.ink, fontFamily: fonts.mono, marginTop: space.sm }]}>
-              {`> CONVOY ALERT  ✓`}
-            </Text>
-          </View>
+              <View style={styles.list}>
+                <Meta style={{ color: colors.dark.inkMuted }}>BROADCAST LOG</Meta>
+                <Text style={[type.body, { color: colors.dark.ink, fontFamily: fonts.mono, marginTop: space.sm }]}>
+                  {`> CONVOY ALERT  ✓`}
+                </Text>
+              </View>
+            </>
+          )}
 
           {resolveErr ? (
             <ErrorStrip
@@ -116,6 +150,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.dark.sos,
   },
   body: { flex: 1, paddingHorizontal: space.lg, paddingTop: space.xl },
+  loadingBlock: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   statBlock: { marginTop: space.xl, borderTopWidth: 1, borderColor: colors.dark.rule },
   list: { marginTop: space.xl },
   footer: { padding: space.lg, borderTopWidth: 1, borderColor: colors.dark.rule },
