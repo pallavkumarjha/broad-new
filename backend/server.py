@@ -278,6 +278,18 @@ class SOSEvent(SOSCreate):
     resolved_at: Optional[str] = None
 
 
+class SOSContact(BaseModel):
+    name: str
+    phone: str
+    relation: Optional[str] = None
+
+
+class SOSDetail(SOSEvent):
+    sender_name: str
+    sender_email: EmailStr
+    emergency_contact: Optional[SOSContact] = None
+
+
 # ---------- Auth dependency ----------
 async def get_current_user(request: Request) -> dict:
     token = None
@@ -895,6 +907,34 @@ async def my_active_sos(user: dict = Depends(get_current_user)):
     if not doc:
         return None
     return SOSEvent(**doc)
+
+
+@api.get("/sos/{sos_id}", response_model=SOSDetail)
+async def get_sos_detail(sos_id: str, user: dict = Depends(get_current_user)):
+    doc = await db.sos_events.find_one({"id": sos_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="SOS not found")
+
+    is_owner = doc["user_id"] == user["id"]
+    allowed = is_owner
+    if not allowed and doc.get("trip_id"):
+        trip = await db.trips.find_one({"id": doc["trip_id"]}, {"_id": 0, "user_id": 1, "crew_ids": 1})
+        if trip:
+            allowed = user["id"] == trip.get("user_id") or user["id"] in (trip.get("crew_ids") or [])
+    if not allowed:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    sender = await db.users.find_one({"id": doc["user_id"]}, {"_id": 0, "name": 1, "email": 1, "emergency_contacts": 1})
+    primary = None
+    contacts = (sender or {}).get("emergency_contacts") or []
+    if contacts:
+        primary = SOSContact(**contacts[0])
+    return SOSDetail(
+        **doc,
+        sender_name=(sender or {}).get("name", "Rider"),
+        sender_email=(sender or {}).get("email", user.get("email", "rider@broad.app")),
+        emergency_contact=primary,
+    )
 
 
 @api.post("/sos/{sos_id}/resolve", response_model=SOSEvent)
