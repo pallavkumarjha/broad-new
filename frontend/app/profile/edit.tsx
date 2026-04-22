@@ -13,7 +13,8 @@ export default function ProfileEdit() {
   const { user, refresh } = useAuth();
   const router = useRouter();
   const { onboarding } = useLocalSearchParams<{ onboarding?: string }>();
-  const isOnboarding = onboarding === '1';
+  // The `onboarding` param is no longer used since we have a separate flow.
+  // This screen is now only for editing profile from settings.
 
   const [name, setName] = useState(user?.name || '');
   const [bike, setBike] = useState({
@@ -48,8 +49,7 @@ export default function ProfileEdit() {
       // User profile changed — invalidate /auth/me cache used by Discover's
       // home_city filter and anything else that reads the me query.
       queryClient.invalidateQueries({ queryKey: ['auth', 'me'] });
-      if (isOnboarding) router.replace('/(tabs)');
-      else router.back();
+      router.back();
     } catch (e: any) {
       Alert.alert('Could not save', e?.response?.data?.detail || e?.message || '');
     } finally { setBusy(false); }
@@ -58,25 +58,14 @@ export default function ProfileEdit() {
   return (
     <SafeAreaView style={styles.container} testID="profile-edit-screen">
       <View style={styles.header}>
-        {isOnboarding ? <View style={{ width: 22 }} /> : (
-          <TouchableOpacity onPress={() => router.back()} testID="edit-back-btn"><Feather name="arrow-left" size={22} color={colors.light.ink} /></TouchableOpacity>
-        )}
-        <Eyebrow>{isOnboarding ? 'WELCOME — TELL US ABOUT YOU' : 'EDIT PROFILE'}</Eyebrow>
+        <TouchableOpacity onPress={() => router.back()} testID="edit-back-btn"><Feather name="arrow-left" size={22} color={colors.light.ink} /></TouchableOpacity>
+        <Eyebrow>EDIT PROFILE</Eyebrow>
         <View style={{ width: 22 }} />
       </View>
       <Rule />
 
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={{ paddingBottom: 120 }} keyboardShouldPersistTaps="handled">
-          {isOnboarding && (
-            <View style={{ paddingHorizontal: space.lg, paddingTop: space.lg }}>
-              <Text style={[type.h2, { color: colors.light.ink }]}>Three small things.</Text>
-              <Text style={[type.body, { color: colors.light.inkMuted, marginTop: space.xs }]}>
-                Your name, your bike, and one person to call if the road bites back.
-              </Text>
-            </View>
-          )}
-
           <View style={styles.section}>
             <Eyebrow>RIDER NAME</Eyebrow>
             <TextInput testID="edit-name-input" value={name} onChangeText={setName} style={styles.input} placeholder="Your name" placeholderTextColor={colors.light.inkMuted} />
@@ -124,12 +113,7 @@ export default function ProfileEdit() {
       </KeyboardAvoidingView>
 
       <View style={styles.cta}>
-        <Button label={isOnboarding ? 'CONTINUE' : 'SAVE'} onPress={submit} loading={busy} testID="edit-save-btn" />
-        {isOnboarding && (
-          <TouchableOpacity onPress={() => router.replace('/(tabs)')} style={{ alignItems: 'center', marginTop: space.md }} testID="edit-skip-btn">
-            <Meta>SKIP FOR NOW</Meta>
-          </TouchableOpacity>
-        )}
+        <Button label="SAVE" onPress={submit} loading={busy} testID="edit-save-btn" />
       </View>
     </SafeAreaView>
   );

@@ -184,6 +184,8 @@ export default function TripDetail() {
       return null;
     }
     if (role === 'crew') {
+      // Completed trips are read-only — no instrument panel or leave action.
+      if (isPast) return null;
       return (
         <View>
           {trip.status === 'active' && (
@@ -245,8 +247,11 @@ export default function TripDetail() {
     return <Button label={busy ? 'SENDING…' : 'REQUEST TO JOIN'} onPress={requestJoin} loading={busy} testID="trip-request-join-btn" />;
   };
 
-  // Header trash icon only visible to organiser
-  const headerRight = isOrganiser
+  const isPast = trip.status === 'completed';
+
+  // Header trash icon only visible to organiser of non-completed trips.
+  // Past trips are read-only — no destructive actions allowed.
+  const headerRight = isOrganiser && !isPast
     ? <TouchableOpacity onPress={deleteTrip} testID="trip-delete-btn"><Feather name="trash-2" size={20} color={colors.light.inkMuted} /></TouchableOpacity>
     : <View style={{ width: 20 }} />;
 
@@ -254,7 +259,11 @@ export default function TripDetail() {
     <SafeAreaView style={styles.container} testID="trip-detail-screen">
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} testID="trip-back-btn"><Feather name="arrow-left" size={22} color={colors.light.ink} /></TouchableOpacity>
-        <Eyebrow>{role === 'stranger' || role === 'requester' || role === 'declined' ? 'OPEN RIDE' : 'PRE-RIDE BRIEFING'}</Eyebrow>
+        <Eyebrow>
+          {isPast ? 'RIDE SUMMARY'
+            : role === 'stranger' || role === 'requester' || role === 'declined' ? 'OPEN RIDE'
+            : 'PRE-RIDE BRIEFING'}
+        </Eyebrow>
         {headerRight}
       </View>
       <Rule />
@@ -296,8 +305,8 @@ export default function TripDetail() {
           </Card>
         </View>
 
-        {/* Organiser-only: pending requests inbox */}
-        {role === 'organiser' && trip.is_public && (
+        {/* Organiser-only: pending requests inbox — hidden for completed trips */}
+        {role === 'organiser' && trip.is_public && !isPast && (
           <View style={styles.section} testID="organiser-requests-section">
             <Eyebrow>JOIN REQUESTS — {pendingRequests.length} PENDING</Eyebrow>
             {pendingRequests.length === 0 ? (

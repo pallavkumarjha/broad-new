@@ -9,11 +9,18 @@ const IS_DEV = process.env.APP_ENV === 'development';
 
 // Backend URL precedence: explicit env var > env-specific default > prod default.
 // .env is still honoured at build-time via EXPO_PUBLIC_BACKEND_URL.
+//
+// Prod default is the Vercel-hosted proxy (broad-homepage) rather than Railway
+// directly. Reason: Indian mobile carriers (Jio/Airtel/Vi) intermittently fail
+// to route to Railway's Fastly edge; Vercel's Mumbai POP is reliably reachable,
+// and the proxy at /api/[...path] forwards server-to-server to Railway.
+// If you need to bypass the proxy (e.g. debugging), set EXPO_PUBLIC_BACKEND_URL
+// to the Railway URL directly via .env or the EAS profile's env block.
 const DEFAULT_BACKEND =
   process.env.EXPO_PUBLIC_BACKEND_URL ||
   (IS_DEV
     ? 'https://broad-backend-integration.up.railway.app' // placeholder — create Railway integration env, then update
-    : 'https://broad-backend-production.up.railway.app');
+    : 'https://broad-homepage.vercel.app');
 
 module.exports = () => ({
   expo: {
