@@ -55,19 +55,37 @@ export function SOSButton({ onTrigger, label = 'HOLD TO SEND SOS', testID = 'sos
 }
 
 // "I am safe" cancel — long press to resolve SOS
-export function SafeButton({ onConfirm, testID = 'sos-safe-button' }: { onConfirm: () => void; testID?: string }) {
+export function SafeButton({
+  onConfirm,
+  testID = 'sos-safe-button',
+  disabled = false,
+  busy = false,
+}: {
+  onConfirm: () => void;
+  testID?: string;
+  disabled?: boolean;
+  busy?: boolean;
+}) {
   const HOLD_MS = 2000;
   const progress = useRef(new Animated.Value(0)).current;
   const timer = useRef<any>(null);
+  const fired = useRef(false);
   const [active, setActive] = useState(false);
 
   const start = () => {
+    if (disabled || busy) return;
+    fired.current = false;
     setActive(true);
     Animated.timing(progress, { toValue: 1, duration: HOLD_MS, useNativeDriver: false }).start();
-    timer.current = setTimeout(() => { onConfirm(); }, HOLD_MS);
+    timer.current = setTimeout(() => {
+      fired.current = true;
+      onConfirm();
+    }, HOLD_MS);
   };
   const cancel = () => {
     if (timer.current) clearTimeout(timer.current);
+    timer.current = null;
+    if (fired.current) return;
     Animated.timing(progress, { toValue: 0, duration: 200, useNativeDriver: false }).start();
     setActive(false);
   };
@@ -77,14 +95,34 @@ export function SafeButton({ onConfirm, testID = 'sos-safe-button' }: { onConfir
     onPanResponderRelease: () => cancel(),
     onPanResponderTerminate: () => cancel(),
   })).current;
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  useEffect(() => {
+    if (!busy) return;
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = null;
+    progress.setValue(1);
+    setActive(false);
+  }, [busy, progress]);
   const fillW = progress.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] });
 
   return (
-    <View testID={testID} style={[styles.wrap, { backgroundColor: 'transparent', borderColor: colors.dark.safe, borderWidth: 1 }]} {...responder.panHandlers}>
+    <View
+      testID={testID}
+      style={[
+        styles.wrap,
+        {
+          backgroundColor: 'transparent',
+          borderColor: colors.dark.safe,
+          borderWidth: 1,
+          opacity: disabled ? 0.45 : 1,
+        },
+      ]}
+      {...(disabled || busy ? {} : responder.panHandlers)}
+    >
       <Animated.View style={[styles.fill, { width: fillW, backgroundColor: colors.dark.safe }]} />
       <View style={styles.content}>
         <Text style={[type.eyebrow, { color: '#FFFFFF', letterSpacing: 2, fontSize: 12 }]}>
-          {active ? 'KEEP HOLDING…' : 'HOLD — I AM SAFE'}
+          {busy ? 'MARKING SAFE…' : active ? 'KEEP HOLDING…' : 'HOLD — I AM SAFE'}
         </Text>
       </View>
     </View>

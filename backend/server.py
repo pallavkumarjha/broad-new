@@ -492,7 +492,9 @@ async def get_trip(trip_id: str, user: dict = Depends(get_current_user)):
     doc = await db.trips.find_one({"id": trip_id}, {"_id": 0})
     if not doc:
         raise HTTPException(status_code=404, detail="Trip not found")
-    if doc["user_id"] != user["id"] and not doc.get("is_public"):
+    is_organiser = doc["user_id"] == user["id"]
+    is_confirmed_crew = user["id"] in (doc.get("crew_ids") or [])
+    if not is_organiser and not is_confirmed_crew and not doc.get("is_public"):
         raise HTTPException(status_code=403, detail="Forbidden")
     return trip_from_doc(doc)
 

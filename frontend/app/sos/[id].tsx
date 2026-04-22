@@ -2,15 +2,17 @@ import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, Animated, StatusBar } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { api } from '../../src/lib/api';
+import { api, describeError } from '../../src/lib/api';
 import { colors, type, space, fonts } from '../../src/theme/tokens';
-import { Eyebrow, Meta, SpecRow } from '../../src/components/ui';
+import { Eyebrow, Meta, SpecRow, ErrorStrip } from '../../src/components/ui';
 import { SafeButton } from '../../src/components/SOSButton';
 
 export default function SOS() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const [event, setEvent] = useState<any>(null);
+  const [resolving, setResolving] = useState(false);
+  const [resolveErr, setResolveErr] = useState('');
   const blink = useRef(new Animated.Value(0.3)).current;
   const pulse = useRef(new Animated.Value(0)).current;
 
@@ -40,13 +42,16 @@ export default function SOS() {
   }, [id]);
 
   const resolve = async () => {
-    try { await api.post(`/sos/${id}/resolve`); } catch {}
-    Alert.alert(
-      'You are marked safe',
-      'Your convoy and emergency contacts have been notified.',
-      [{ text: 'Back to home', onPress: () => router.replace('/(tabs)') }],
-      { cancelable: false }
-    );
+    if (!id || resolving) return;
+    setResolveErr('');
+    setResolving(true);
+    try {
+      await api.post(`/sos/${id}/resolve`, undefined, { timeout: 8000 });
+      router.replace(`/sos/safe/${id}`);
+    } catch (e: any) {
+      setResolveErr(describeError(e, 'Could not mark you safe. Check your connection and try again.'));
+      setResolving(false);
+    }
   };
 
   return (
@@ -66,26 +71,35 @@ export default function SOS() {
         <View style={styles.body}>
           <Text style={[type.display, { color: colors.dark.ink }]}>Help is on the way.</Text>
           <Text style={[type.bodyLg, { color: colors.dark.inkMuted, marginTop: space.sm }]}>
-            Your location, heading and speed are being broadcast to your convoy and emergency contacts.
+            Your location, heading and speed are being broadcast to your convoy.
           </Text>
 
           <View style={styles.statBlock}>
             <SpecRow dark label="STATUS" value="ACTIVE" />
             <SpecRow dark label="LOCATION" value={event?.lat != null ? `${event.lat.toFixed(3)}°N ${event.lng.toFixed(3)}°E` : '— —'} />
             <SpecRow dark label="SPEED" value={event ? `${Math.round(event.speed_kmh)} KM/H` : '0 KM/H'} />
-            <SpecRow dark label="SENT TO" value="CONVOY · CONTACTS" last />
+            <SpecRow dark label="SENT TO" value="CONVOY" last />
           </View>
 
           <View style={styles.list}>
             <Meta style={{ color: colors.dark.inkMuted }}>BROADCAST LOG</Meta>
             <Text style={[type.body, { color: colors.dark.ink, fontFamily: fonts.mono, marginTop: space.sm }]}>
-              {`> CONVOY ALERT  ✓\n> EMERGENCY CONTACTS  ✓\n> NEAREST HOSPITAL  PENDING\n> SMS FALLBACK  QUEUED`}
+              {`> CONVOY ALERT  ✓`}
             </Text>
           </View>
+
+          {resolveErr ? (
+            <ErrorStrip
+              testID="sos-resolve-error"
+              title="COULD NOT MARK SAFE"
+              message={resolveErr}
+              style={{ marginTop: space.lg }}
+            />
+          ) : null}
         </View>
 
         <View style={styles.footer}>
-          <SafeButton onConfirm={resolve} />
+          <SafeButton onConfirm={resolve} busy={resolving} />
         </View>
       </SafeAreaView>
     </View>
