@@ -893,7 +893,7 @@ async def trigger_sos(body: SOSCreate, request: Request, user: dict = Depends(ge
     import asyncio
     sender_name = user.get("name", "A rider")
     if body.trip_id:
-        asyncio.ensure_future(hub.broadcast_sos(body.trip_id, sender_name, sid))
+        asyncio.ensure_future(hub.broadcast_sos(body.trip_id, sender_name, user["id"], sid))
     asyncio.ensure_future(_notify_sos_crew(doc, sender_name))
     return SOSEvent(**doc)
 
@@ -1081,17 +1081,29 @@ class ConvoyHub:
     def __init__(self) -> None:
         self.rooms: dict = {}
 
-    async def join(self, trip_id: str, user_id: str, name: str, ws: WebSocket) -> None:
+    async def join(self, trip_id: str, user_id: str, name: str, ws: WebSocket) -> str:
         await ws.accept()
         room = self.rooms.setdefault(trip_id, {})
-        room[user_id] = {"ws": ws, "name": name, "lat": None, "lng": None, "speed_kmh": 0, "updated_at": now_iso()}
+        rider = room.setdefault(
+            user_id,
+            {"name": name, "lat": None, "lng": None, "speed_kmh": 0, "updated_at": now_iso(), "sockets": {}},
+        )
+        rider["name"] = name
+        conn_id = str(uuid.uuid4())
+        rider["sockets"][conn_id] = ws
         await self.broadcast_state(trip_id)
+        return conn_id
 
-    def leave(self, trip_id: str, user_id: str) -> None:
+    def leave(self, trip_id: str, user_id: str, conn_id: str) -> None:
         room = self.rooms.get(trip_id)
         if not room:
             return
-        room.pop(user_id, None)
+        rider = room.get(user_id)
+        if not rider:
+            return
+        rider.get("sockets", {}).pop(conn_id, None)
+        if not rider.get("sockets"):
+            room.pop(user_id, None)
         if not room:
             self.rooms.pop(trip_id, None)
 
@@ -1105,18 +1117,32 @@ class ConvoyHub:
         room[user_id]["updated_at"] = now_iso()
         await self.broadcast_state(trip_id)
 
-    async def broadcast_sos(self, trip_id: str, sender_name: str, sos_id: str) -> None:
+    def _drop_dead_connection(self, trip_id: str, user_id: str, conn_id: str) -> None:
+        room = self.rooms.get(trip_id)
+        if not room:
+            return
+        rider = room.get(user_id)
+        if not rider:
+            return
+        rider.get("sockets", {}).pop(conn_id, None)
+        if not rider.get("sockets"):
+            room.pop(user_id, None)
+        if not room:
+            self.rooms.pop(trip_id, None)
+
+    async def broadcast_sos(self, trip_id: str, sender_name: str, sender_user_id: str, sos_id: str) -> None:
         """Push a real-time SOS alert to every connected WebSocket in the room."""
         room = self.rooms.get(trip_id, {})
-        payload = {"type": "sos", "sender": sender_name, "sos_id": sos_id}
-        dead = []
-        for uid, r in list(room.items()):
-            try:
-                await r["ws"].send_json(payload)
-            except Exception:
-                dead.append(uid)
-        for uid in dead:
-            room.pop(uid, None)
+        payload = {"type": "sos", "sender": sender_name, "sender_user_id": sender_user_id, "sos_id": sos_id}
+        dead: list[tuple[str, str]] = []
+        for uid, rider in list(room.items()):
+            for conn_id, ws in list((rider.get("sockets") or {}).items()):
+                try:
+                    await ws.send_json(payload)
+                except Exception:
+                    dead.append((uid, conn_id))
+        for uid, conn_id in dead:
+            self._drop_dead_connection(trip_id, uid, conn_id)
 
     async def broadcast_state(self, trip_id: str) -> None:
         room = self.rooms.get(trip_id, {})
@@ -1133,14 +1159,15 @@ class ConvoyHub:
             for uid, r in room.items()
         ]
         payload = {"type": "state", "members": members}
-        dead = []
-        for uid, r in list(room.items()):
-            try:
-                await r["ws"].send_json(payload)
-            except Exception:
-                dead.append(uid)
-        for uid in dead:
-            room.pop(uid, None)
+        dead: list[tuple[str, str]] = []
+        for uid, rider in list(room.items()):
+            for conn_id, ws in list((rider.get("sockets") or {}).items()):
+                try:
+                    await ws.send_json(payload)
+                except Exception:
+                    dead.append((uid, conn_id))
+        for uid, conn_id in dead:
+            self._drop_dead_connection(trip_id, uid, conn_id)
 
 
 hub = ConvoyHub()
@@ -1160,7 +1187,7 @@ async def ws_convoy(ws: WebSocket, trip_id: str, token: str = ""):
         await ws.close(code=4403)
         return
     name = u.get("name", "Rider")
-    await hub.join(trip_id, uid, name, ws)
+    conn_id = await hub.join(trip_id, uid, name, ws)
     try:
         while True:
             msg = await ws.receive_json()
@@ -1169,7 +1196,7 @@ async def ws_convoy(ws: WebSocket, trip_id: str, token: str = ""):
     except WebSocketDisconnect:
         pass
     finally:
-        hub.leave(trip_id, uid)
+        hub.leave(trip_id, uid, conn_id)
         try:
             await hub.broadcast_state(trip_id)
         except Exception:

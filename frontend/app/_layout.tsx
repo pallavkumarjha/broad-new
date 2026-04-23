@@ -10,6 +10,7 @@ import { SettingsProvider } from '../src/contexts/SettingsContext';
 import { colors } from '../src/theme/tokens';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClient } from '../src/lib/queryClient';
+import { GlobalSosListener } from '../src/components/GlobalSosListener';
 
 export default function RootLayout() {
   const [f1] = useFraunces({ Fraunces_400Regular, Fraunces_500Medium, Fraunces_600SemiBold, Fraunces_700Bold });
@@ -34,6 +35,7 @@ export default function RootLayout() {
     <SafeAreaProvider>
       <AuthProvider>
         <SettingsProvider>
+          <GlobalSosListener />
           <StatusBar style="dark" />
           <Stack
             screenOptions={{
