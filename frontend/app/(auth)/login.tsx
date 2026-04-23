@@ -10,8 +10,8 @@ import { HelmetIllus } from '../../src/components/illustrations';
 export default function Login() {
   const { signIn } = useAuth();
   const router = useRouter();
-  const [email, setEmail] = useState('rider@broad.app');
-  const [password, setPassword] = useState('rider123');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const [focused, setFocused] = useState<'email' | 'password' | null>(null);

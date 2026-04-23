@@ -22,11 +22,36 @@ const PRESETS = [
   { name: 'Shimla', lat: 31.1048, lng: 77.1734 },
 ];
 
+const DAY_MS = 86400000;
+
+const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+const toIsoDate = (d: Date) => {
+  const y = d.getFullYear();
+  const m = `${d.getMonth() + 1}`.padStart(2, '0');
+  const day = `${d.getDate()}`.padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+const formatPlannedDate = (d: Date) => d.toLocaleDateString('en-IN', {
+  weekday: 'short',
+  day: 'numeric',
+  month: 'short',
+  year: 'numeric',
+});
+const relativeDateLabel = (d: Date) => {
+  const today = startOfDay(new Date());
+  const diff = Math.round((startOfDay(d).getTime() - today.getTime()) / DAY_MS);
+  if (diff === 0) return 'TODAY';
+  if (diff === 1) return 'TOMORROW';
+  if (diff > 1) return `IN ${diff} DAYS`;
+  return `${Math.abs(diff)} DAYS AGO`;
+};
+
 export default function Plan() {
   const router = useRouter();
   const [name, setName] = useState('Weekend Run');
   const [start, setStart] = useState(PRESETS[0]);
   const [end, setEnd] = useState(PRESETS[2]);
+  const [plannedDate, setPlannedDate] = useState(() => startOfDay(new Date(Date.now() + DAY_MS * 3)));
   const [waypoints, setWaypoints] = useState<typeof PRESETS>([]);
   const [crewList, setCrewList] = useState<string[]>(['Rhea', 'Kabir']);
   const [crewIdsList, setCrewIdsList] = useState<string[]>([]); // user IDs for push notifications
@@ -45,6 +70,7 @@ export default function Plan() {
   const [maxRiders, setMaxRiders] = useState(8);
   const [description, setDescription] = useState('');
   const [pickerFor, setPickerFor] = useState<'start' | 'end' | 'wp' | null>(null);
+  const [datePickerOpen, setDatePickerOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<typeof PRESETS>(PRESETS);
   const [searching, setSearching] = useState(false);
@@ -70,6 +96,7 @@ export default function Plan() {
   // M10 — picker translateY spring
   const pickerAnim = useRef(new Animated.Value(0)).current;
   const crewPickerAnim = useRef(new Animated.Value(0)).current;
+  const datePickerAnim = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     Animated.timing(pickerAnim, {
       toValue: pickerFor ? 1 : 0,
@@ -86,6 +113,14 @@ export default function Plan() {
       useNativeDriver: true,
     }).start();
   }, [crewPickerOpen, crewPickerAnim]);
+  useEffect(() => {
+    Animated.timing(datePickerAnim, {
+      toValue: datePickerOpen ? 1 : 0,
+      duration: 260,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [datePickerAnim, datePickerOpen]);
 
   // Debounced Nominatim search
   useEffect(() => {
@@ -129,6 +164,19 @@ export default function Plan() {
     return Math.round(total * 1.25); // road factor
   }, [allPoints]);
 
+  const dateOptions = useMemo(() => {
+    const today = startOfDay(new Date());
+    return Array.from({ length: 60 }, (_, i) => {
+      const date = new Date(today.getTime() + i * DAY_MS);
+      return {
+        key: toIsoDate(date),
+        date,
+        label: formatPlannedDate(date),
+        relative: relativeDateLabel(date),
+      };
+    });
+  }, []);
+
   // Debounced rider search
   useEffect(() => {
     if (!crewPickerOpen) return;
@@ -151,7 +199,7 @@ export default function Plan() {
         name, start, end, waypoints,
         distance_km: distance,
         elevation_m: elevMax ?? Math.round(distance * 3.5),
-        planned_date: new Date(Date.now() + 86400000 * 3).toISOString().slice(0, 10),
+        planned_date: toIsoDate(plannedDate),
         crew: crewList,
         crew_ids: crewIdsList,
         notes,
@@ -213,6 +261,17 @@ export default function Plan() {
               </TouchableOpacity>
               <Meta style={{ marginLeft: space.md }}>{days === 1 ? 'DAY TRIP' : `MULTI-DAY · ~${Math.round(distance / days)} KM/DAY`}</Meta>
             </View>
+          </View>
+
+          <View style={styles.section}>
+            <Eyebrow>START DATE</Eyebrow>
+            <TouchableOpacity testID="plan-pick-date" onPress={() => setDatePickerOpen(true)} style={styles.pickRow} activeOpacity={0.85}>
+              <View>
+                <Text style={[type.bodyLg, { color: colors.light.ink }]}>{formatPlannedDate(plannedDate)}</Text>
+                <Meta style={{ marginTop: 4, color: colors.light.amber }}>{relativeDateLabel(plannedDate)}</Meta>
+              </View>
+              <Meta>CHANGE</Meta>
+            </TouchableOpacity>
           </View>
 
           <View style={styles.section}>
@@ -409,6 +468,45 @@ export default function Plan() {
                 <Text style={[type.body, { color: colors.light.inkMuted }]}>Type at least 2 characters to search registered riders, or add a name for someone not on Broad yet.</Text>
               </View>
             )}
+          </ScrollView>
+        </Animated.View>
+      )}
+      {datePickerOpen && (
+        <Animated.View style={[styles.picker, {
+          transform: [{ translateY: datePickerAnim.interpolate({ inputRange: [0, 1], outputRange: [600, 0] }) }],
+          opacity: datePickerAnim,
+        }]}>
+          <View style={styles.pickerHead}>
+            <Eyebrow>CHOOSE START DATE</Eyebrow>
+            <TouchableOpacity onPress={() => setDatePickerOpen(false)} testID="plan-date-picker-close"><Feather name="x" size={20} color={colors.light.ink} /></TouchableOpacity>
+          </View>
+          <Rule />
+          <ScrollView>
+            {dateOptions.map((option, i) => {
+              const selected = toIsoDate(plannedDate) === option.key;
+              return (
+                <TouchableOpacity
+                  key={option.key}
+                  testID={`plan-date-option-${i}`}
+                  style={styles.pickerRow}
+                  activeOpacity={0.85}
+                  onPress={() => {
+                    setPlannedDate(option.date);
+                    setDatePickerOpen(false);
+                  }}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text style={[type.body, { color: colors.light.ink, fontFamily: selected ? 'Fraunces_500Medium' : 'Fraunces_400Regular' }]}>
+                      {option.label}
+                    </Text>
+                    <Meta style={{ marginTop: 2, color: selected ? colors.light.amber : colors.light.inkMuted }}>
+                      {option.relative}
+                    </Meta>
+                  </View>
+                  {selected ? <Feather name="check" size={16} color={colors.light.amber} /> : <Meta>SET</Meta>}
+                </TouchableOpacity>
+              );
+            })}
           </ScrollView>
         </Animated.View>
       )}
