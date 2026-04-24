@@ -521,6 +521,16 @@ async def update_trip(trip_id: str, body: TripUpdate, user: dict = Depends(get_c
     update = {k: v for k, v in body.dict(exclude_none=True).items()}
     if body.status == "active" and not doc.get("started_at"):
         update["started_at"] = now_iso()
+        # Notify confirmed crew that the ride has started (trigger event #4).
+        crew_ids = doc.get("crew_ids") or []
+        if crew_ids:
+            import asyncio
+            asyncio.ensure_future(_push_to_users(
+                crew_ids,
+                title="Ride started — saddle up.",
+                body=f"{user.get('name', 'The organiser')} started {doc.get('name', 'your ride')}.",
+                data={"type": "trip_started", "trip_id": trip_id},
+            ))
     if body.status == "completed":
         update["ended_at"] = now_iso()
         # Credit every rider who was on the trip — organiser + all confirmed crew —

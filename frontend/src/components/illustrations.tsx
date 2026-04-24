@@ -313,6 +313,161 @@ export function EmptyRoadIllus({ width = 360, height = 160, dark = false }: Prop
   );
 }
 
+// ─── Sunrise Ride — home screen hero ─────────────────────────────────────────
+// Bike silhouette heading toward a dawn horizon. Adapted from DawnIllus;
+// the motorcycle grounds the editorial scene in the product's purpose.
+export function SunriseRideIllus({ width = 360, height = 180 }: Props) {
+  const ink   = colors.light.ink;
+  const amber = colors.light.amber;
+  const muted = '#B8B3A6';
+  const cx = 400, cy = 265;
+
+  const rays = [225, 248, 270, 292, 315].map((deg, i) => {
+    const rad = (deg * Math.PI) / 180;
+    const r1 = 55, r2 = i % 2 === 0 ? 90 : 78;
+    return {
+      x1: cx + Math.cos(rad) * r1, y1: cy + Math.sin(rad) * r1,
+      x2: cx + Math.cos(rad) * r2, y2: cy + Math.sin(rad) * r2,
+    };
+  });
+
+  return (
+    <View style={[styles.wrap, { width, height }]}>
+      <Svg width={width} height={height} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid slice">
+        <PaperBg />
+        {/* Sun corona */}
+        <Circle cx={cx} cy={cy} r={100} fill={amber} opacity={0.07} />
+        <Circle cx={cx} cy={cy} r={72}  fill={amber} opacity={0.11} />
+        <Circle cx={cx} cy={cy} r={50}  fill="none" stroke={amber} strokeWidth={1.2} opacity={0.5} />
+        {rays.map((r, i) => (
+          <Line key={i} x1={r.x1} y1={r.y1} x2={r.x2} y2={r.y2} stroke={amber} strokeWidth={1.5} opacity={0.7} />
+        ))}
+        <Circle cx={cx} cy={cy} r={36} fill={amber} opacity={0.25} />
+        <Circle cx={cx} cy={cy} r={22} fill={amber} />
+        {/* Far hills */}
+        <Path d="M 0 265 Q 100 245 210 258 Q 310 270 400 265 Q 490 260 590 252 Q 700 244 800 262 L 800 400 L 0 400 Z" fill="#E0DCD2" stroke={muted} strokeWidth={0.8} />
+        {/* Near ridge */}
+        <Path d="M 0 315 Q 90 295 170 308 Q 280 325 355 298 Q 400 285 445 298 Q 525 318 630 300 Q 720 288 800 310 L 800 400 L 0 400 Z" fill={ink} />
+        {/* Road */}
+        <Path d="M 305 400 L 388 265 L 412 265 L 495 400 Z" fill="#E8E4DB" stroke={ink} strokeWidth={1} />
+        {/* Amber centre dashes */}
+        {[0, 1, 2, 3].map((i) => {
+          const y = 300 + i * 24, hw = 2 + i * 1.5;
+          return <Rect key={i} x={400 - hw} y={y} width={hw * 2} height={10} fill={amber} opacity={0.9} />;
+        })}
+        {/* ── Motorcycle silhouette — heading toward the sun ── */}
+        {/* Rear wheel */}
+        <Circle cx={372} cy={364} r={22} fill="none" stroke={ink} strokeWidth={3} />
+        <Circle cx={372} cy={364} r={6}  fill={ink} />
+        {/* Front wheel */}
+        <Circle cx={428} cy={364} r={22} fill="none" stroke={ink} strokeWidth={3} />
+        <Circle cx={428} cy={364} r={6}  fill={ink} />
+        {/* Main frame / engine block */}
+        <Path d="M 387 364 L 381 333 L 402 320 L 430 327 L 441 353 L 441 364 Z" fill={ink} />
+        {/* Tank — amber accent */}
+        <Path d="M 388 333 L 415 326 L 412 316 L 387 320 Z" fill={amber} />
+        {/* Rider torso */}
+        <Path d="M 394 328 L 422 322 L 424 310 L 400 314 Z" fill={ink} />
+        {/* Helmet */}
+        <Circle cx={412} cy={302} r={13} fill={ink} />
+        {/* Handlebar */}
+        <Line x1={422} y1={324} x2={440} y2={318} stroke={ink} strokeWidth={2.5} strokeLinecap="round" />
+        {/* Exhaust */}
+        <Path d="M 387 356 L 354 364 L 354 370 L 389 364 Z" fill={muted} />
+        {/* Front fork */}
+        <Line x1={434} y1={344} x2={428} y2={344} stroke={ink} strokeWidth={1.5} />
+      </Svg>
+    </View>
+  );
+}
+
+// ─── Desert — Rajasthan / flat terrain ────────────────────────────────────────
+export function DesertIllus({ width = 360, height = 180 }: Props) {
+  const ink   = colors.light.ink;
+  const amber = colors.light.amber;
+  const muted = '#B8B3A6';
+  const sand  = '#DDD5C0';
+
+  return (
+    <View style={[styles.wrap, { width, height }]}>
+      <Svg width={width} height={height} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid slice">
+        <PaperBg />
+        {/* Sun — high and hot */}
+        <Circle cx={680} cy={80} r={58} fill={amber} opacity={0.08} />
+        <Circle cx={680} cy={80} r={40} fill={amber} opacity={0.14} />
+        <Circle cx={680} cy={80} r={26} fill={amber} />
+        {/* Horizon */}
+        <Line x1={0} y1={200} x2={800} y2={200} stroke={muted} strokeWidth={0.8} />
+        {/* Sandy floor */}
+        <Rect x={0} y={200} width={800} height={200} fill={sand} />
+        {/* Far dune layer */}
+        <Path d="M 0 280 Q 100 245 200 268 Q 260 282 300 262 Q 350 242 400 270 Q 450 298 520 268 Q 600 240 700 274 L 800 260 L 800 400 L 0 400 Z" fill="#D4C9B0" stroke="none" />
+        {/* Near dune / foreground */}
+        <Path d="M 0 338 Q 90 314 180 330 Q 250 342 320 320 Q 380 304 450 328 Q 530 350 620 330 Q 710 312 800 336 L 800 400 L 0 400 Z" fill={ink} />
+        {/* Arrow-straight desert road */}
+        <Path d="M 352 400 L 392 200 L 408 200 L 448 400 Z" fill="#C8BFA8" stroke={muted} strokeWidth={0.8} />
+        {/* Road dashes */}
+        {[0, 1, 2, 3, 4].map((i) => {
+          const y = 218 + i * 36, hw = 2 + i * 2.2;
+          return <Rect key={i} x={400 - hw} y={y} width={hw * 2} height={14} fill={amber} opacity={0.7} />;
+        })}
+        {/* Acacia tree — flat-topped, classic Rajasthan */}
+        <Line x1={155} y1={268} x2={148} y2={202} stroke={ink} strokeWidth={2} />
+        <Path d="M 96 210 Q 152 178 208 210" stroke={ink} strokeWidth={1.6} fill={sand} />
+        <Path d="M 110 204 Q 152 186 194 204" stroke={ink} strokeWidth={1} fill="none" />
+        {/* Distant scrub */}
+        <Line x1={590} y1={276} x2={590} y2={258} stroke={ink} strokeWidth={1.2} />
+        <Path d="M 572 263 Q 590 254 608 263" stroke={ink} strokeWidth={1} fill="none" />
+        {/* Heat shimmer above road */}
+        {[1, 2, 3].map((i) => (
+          <Path key={i} d={`M ${393 - i * 3} ${212 + i * 5} Q 400 ${207 + i * 5} ${407 + i * 3} ${212 + i * 5}`} stroke={muted} strokeWidth={0.6} fill="none" opacity={0.45} />
+        ))}
+        {/* Distant fort outline */}
+        <Rect x={574} y={186} width={9}  height={14} fill={muted} opacity={0.45} />
+        <Rect x={587} y={189} width={20} height={11} fill={muted} opacity={0.45} />
+        <Rect x={612} y={186} width={9}  height={14} fill={muted} opacity={0.45} />
+      </Svg>
+    </View>
+  );
+}
+
+// ─── Summit — achievement / last ride recap ───────────────────────────────────
+// Single dramatic peak with amber flag and a dashed trail of waypoints.
+export function SummitIllus({ width = 360, height = 180 }: Props) {
+  const ink   = colors.light.ink;
+  const amber = colors.light.amber;
+  const muted = '#B8B3A6';
+
+  return (
+    <View style={[styles.wrap, { width, height }]}>
+      <Svg width={width} height={height} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid slice">
+        <PaperBg />
+        {/* Stars */}
+        {[[110,55],[215,38],[325,76],[485,48],[590,68],[695,44],[750,86]].map(([x,y],i) => (
+          <Circle key={i} cx={x} cy={y} r={2} fill={muted} opacity={0.55} />
+        ))}
+        {/* Far ridge */}
+        <Path d="M 0 220 L 100 145 L 185 198 L 285 122 L 370 182 L 455 138 L 535 192 L 610 110 L 710 178 L 800 132 L 800 400 L 0 400 Z" fill="none" stroke={muted} strokeWidth={0.9} />
+        {/* Main peak */}
+        <Path d="M 0 325 L 400 78 L 800 325 L 800 400 L 0 400 Z" fill="#E0DCD2" stroke={ink} strokeWidth={1.4} />
+        {/* Snow cap */}
+        <Path d="M 400 78 L 462 162 L 338 162 Z" fill={ink} />
+        {/* Summit flagpole + amber flag */}
+        <Line x1={400} y1={78} x2={400} y2={42} stroke={ink} strokeWidth={1.8} />
+        <Path d="M 400 42 L 436 56 L 400 70 Z" fill={amber} />
+        {/* Winding trail with amber dashes */}
+        <Path d="M 155 400 Q 195 360 225 332 Q 258 302 282 278 Q 314 250 342 238 Q 370 226 388 205 Q 396 190 400 174" stroke={amber} strokeWidth={1.8} fill="none" strokeDasharray="6 5" />
+        {/* Waypoint dots on trail */}
+        {[[218,340],[275,284],[334,242],[390,207]].map(([x,y],i) => (
+          <Circle key={i} cx={x} cy={y} r={5} fill={colors.light.bg} stroke={amber} strokeWidth={1.5} />
+        ))}
+        {/* Foreground ridge */}
+        <Path d="M 0 365 Q 155 336 305 358 Q 455 380 610 352 Q 730 330 800 362 L 800 400 L 0 400 Z" fill={ink} />
+      </Svg>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   wrap: { overflow: 'hidden', backgroundColor: colors.light.surface },
 });
@@ -323,14 +478,16 @@ export function trackIllus(trip: any) {
   if (/leh|manali|spiti|himalay|ladakh|sarchu|kaza|pang|shimla|tawang/.test(text)) return 'himalaya';
   if (/coorg|mysuru|mysore|nilgiri|wayanad|chikmagalur|ooty|munnar/.test(text)) return 'ghats';
   if (/goa|pondi|kerala|konkan|mangalore|coast|vizag|gokarna/.test(text)) return 'coast';
+  if (/jaipur|rajasthan|jaisalmer|bikaner|jodhpur|pushkar|desert|rann/.test(text)) return 'desert';
   return 'road';
 }
 
 export function TripIllus({ trip, width, height }: { trip: any; width?: number; height?: number }) {
   const kind = trackIllus(trip);
   if (kind === 'himalaya') return <MountainIllus width={width} height={height} />;
-  if (kind === 'ghats') return <GhatsIllus width={width} height={height} />;
-  if (kind === 'coast') return <CoastIllus width={width} height={height} />;
+  if (kind === 'ghats')    return <GhatsIllus    width={width} height={height} />;
+  if (kind === 'coast')    return <CoastIllus    width={width} height={height} />;
+  if (kind === 'desert')   return <DesertIllus   width={width} height={height} />;
   return <RoadIllus width={width} height={height} />;
 }
 

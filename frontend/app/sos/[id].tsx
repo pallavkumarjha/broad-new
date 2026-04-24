@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, Animated, StatusBar } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { api, describeError } from '../../src/lib/api';
+import { useAuth } from '../../src/contexts/AuthContext';
 import { colors, type, space, fonts } from '../../src/theme/tokens';
 import { Eyebrow, Meta, SpecRow, ErrorStrip, Button } from '../../src/components/ui';
 import { SafeButton } from '../../src/components/SOSButton';
@@ -12,6 +13,7 @@ const fmtCoord = (value: number, pos: string, neg: string) => `${Math.abs(value)
 export default function SOS() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
+  const { user } = useAuth();
   const [event, setEvent] = useState<any>(null);
   const [resolving, setResolving] = useState(false);
   const [resolveErr, setResolveErr] = useState('');
@@ -35,10 +37,13 @@ export default function SOS() {
   const ringOpacity = pulse.interpolate({ inputRange: [0, 0.8, 1], outputRange: [0.55, 0.05, 0] });
 
   useEffect(() => {
+    if (!id) return;
     (async () => {
       try {
         setLoadErr('');
-        const { data } = await api.get('/sos/active');
+        // Fetch by ID so crew members arriving via notification tap see correct data.
+        // GET /sos/{id} is accessible to the sender AND any crew member on the trip.
+        const { data } = await api.get(`/sos/${id}`);
         setEvent(data);
       } catch (e: any) {
         setLoadErr(describeError(e, 'Could not load SOS details.'));
@@ -62,6 +67,9 @@ export default function SOS() {
   const locationText = event?.lat != null ? `${fmtCoord(event.lat, 'N', 'S')} ${fmtCoord(event.lng, 'E', 'W')}` : '— —';
   const showLoading = !event && !loadErr;
   const showLoadError = !event && !!loadErr;
+  // Crew members see who triggered SOS; only the sender gets the resolve button.
+  const isSender = !!user && event?.user_id === user.id;
+  const senderName: string = event?.sender_name || 'A rider';
 
   return (
     <View style={styles.container} testID="sos-active-screen">
@@ -101,15 +109,27 @@ export default function SOS() {
             </View>
           ) : (
             <>
-              <Text style={[type.display, { color: colors.dark.ink }]}>Help is on the way.</Text>
-              <Text style={[type.bodyLg, { color: colors.dark.inkMuted, marginTop: space.sm }]}>
-                Your location, heading and speed are being broadcast to your convoy.
-              </Text>
+              {isSender ? (
+                <>
+                  <Text style={[type.display, { color: colors.dark.ink }]}>Help is on the way.</Text>
+                  <Text style={[type.bodyLg, { color: colors.dark.inkMuted, marginTop: space.sm }]}>
+                    Your location, heading and speed are being broadcast to your convoy.
+                  </Text>
+                </>
+              ) : (
+                <>
+                  <Text style={[type.display, { color: colors.dark.ink }]}>SOS — {senderName}.</Text>
+                  <Text style={[type.bodyLg, { color: colors.dark.inkMuted, marginTop: space.sm }]}>
+                    {senderName} triggered an SOS. Their location is being broadcast. Check on them.
+                  </Text>
+                </>
+              )}
 
               <View style={styles.statBlock}>
                 <SpecRow dark label="STATUS" value="ACTIVE" />
                 <SpecRow dark label="LOCATION" value={locationText} />
                 <SpecRow dark label="SPEED" value={event ? `${Math.round(event.speed_kmh)} KM/H` : '0 KM/H'} />
+                {!isSender && <SpecRow dark label="RIDER" value={senderName.toUpperCase()} />}
                 <SpecRow dark label="SENT TO" value="CONVOY" last />
               </View>
 
@@ -133,7 +153,17 @@ export default function SOS() {
         </View>
 
         <View style={styles.footer}>
-          <SafeButton onConfirm={resolve} busy={resolving} />
+          {isSender ? (
+            <SafeButton onConfirm={resolve} busy={resolving} />
+          ) : (
+            <Button
+              dark
+              variant="ghost"
+              label="BACK TO RIDE"
+              onPress={() => router.back()}
+              testID="sos-crew-back-btn"
+            />
+          )}
         </View>
       </SafeAreaView>
     </View>

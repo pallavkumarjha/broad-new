@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { Platform } from 'react-native';
+import Constants from 'expo-constants';
 import { api, storage, TOKEN_KEY, REFRESH_TOKEN_KEY, describeError } from '../lib/api';
 
 export type User = {
@@ -37,7 +38,8 @@ async function _registerPushToken(): Promise<void> {
       finalStatus = s;
     }
     if (finalStatus !== 'granted') return;
-    const tokenData = await Notifications.getExpoPushTokenAsync();
+    const projectId = Constants.expoConfig?.extra?.eas?.projectId as string | undefined;
+    const tokenData = await Notifications.getExpoPushTokenAsync({ projectId });
     await api.post('/users/me/push-token', { token: tokenData.data });
   } catch {
     // Silently swallow — push is opt-in, never block auth flow

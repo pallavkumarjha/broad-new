@@ -84,6 +84,15 @@ module.exports = () => ({
         },
       ],
       'expo-document-picker',
+      [
+        'expo-notifications',
+        {
+          // Tinted notification icon for Android (monochrome, white on transparent).
+          // Falls back to app icon if omitted — good enough for now.
+          color: '#1C1B1A',
+          sounds: [],
+        },
+      ],
     ],
     experiments: {
       typedRoutes: true,
