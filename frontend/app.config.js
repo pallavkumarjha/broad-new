@@ -97,10 +97,10 @@ module.exports = () => ({
           locationWhenInUsePermission:
             'Allow Broad to access your location so your crew can see you on the map during a ride.',
         },
-        'expo-notifications',
+      ], // Close the location array
+      [
+        'expo-notifications', // Start a new array for notifications
         {
-          // Tinted notification icon for Android (monochrome, white on transparent).
-          // Falls back to app icon if omitted — good enough for now.
           color: '#1C1B1A',
           sounds: [],
         },
