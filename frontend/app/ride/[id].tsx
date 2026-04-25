@@ -135,6 +135,24 @@ export default function LiveRide() {
     })();
   }, [id]);
 
+  // Road-following polyline. Hits the backend cache so this is normally a
+  // single quick fetch per ride. Failures are silent — MapView falls back to
+  // the straight-line polyline between waypoints when `routeCoords` is empty.
+  const [routeCoords, setRouteCoords] = useState<[number, number][] | undefined>(undefined);
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data } = await api.get(`/trips/${id}/route-geometry`);
+        if (!cancelled && Array.isArray(data?.coords) && data.coords.length >= 2) {
+          setRouteCoords(data.coords);
+        }
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, [id]);
+
   // Elapsed-time tick. Speed + progress now sourced from GPS only.
   useEffect(() => {
     const t = setInterval(() => {
@@ -385,9 +403,11 @@ export default function LiveRide() {
           </View>
 
         <ScrollView contentContainerStyle={{ paddingBottom: space.xl }}>
-          {/* Map — self + crew live markers, diffed by id inside the WebView. */}
+          {/* Map — self + crew live markers, diffed by id inside the WebView.
+              `routeCoords` is the OSRM road-following polyline; falls back to
+              straight-line waypoint connections when not yet loaded. */}
           <View style={{ alignItems: 'center', paddingTop: space.sm }}>
-            <MapView points={allPoints} dark width={screenWidth} height={300} markers={markers} />
+            <MapView points={allPoints} dark width={screenWidth} height={300} markers={markers} routeCoords={routeCoords} />
           </View>
 
           {/* Speedometer */}

@@ -521,6 +521,88 @@ async def get_trip(trip_id: str, user: dict = Depends(get_current_user)):
     return trip_from_doc(doc)
 
 
+# ---------- Route geometry (road-following polyline) ----------
+# Riders expect the live ride map to draw the actual road they'll be on, not
+# straight lines between waypoints. We resolve those once per trip via OSRM
+# and cache on the trip doc — the route doesn't change between fixings, and
+# OSRM's public demo has aggressive rate limits we don't want to hit on
+# every map render.
+#
+# Provider is configurable via OSRM_BASE_URL env so we can swap to a
+# self-hosted instance later (Docker + India OSM extract, ~$5/mo) without
+# touching the frontend.
+_OSRM_BASE = os.environ.get("OSRM_BASE_URL", "https://router.project-osrm.org")
+
+
+async def _fetch_osrm_geometry(points: list[dict]) -> list[list[float]] | None:
+    """Hit OSRM /route to get a road-following polyline through the waypoints.
+
+    Returns a list of [lat, lng] pairs or None on failure. Never raises —
+    callers fall back to straight-line rendering when this returns None so
+    a flaky routing service doesn't break the ride screen entirely.
+    """
+    if len(points) < 2:
+        return None
+    # OSRM wants `lon,lat;lon,lat;...` (note the order — opposite of Leaflet).
+    coords = ";".join(f"{p['lng']},{p['lat']}" for p in points if p.get("lat") is not None and p.get("lng") is not None)
+    url = f"{_OSRM_BASE}/route/v1/driving/{coords}"
+    try:
+        async with httpx.AsyncClient(timeout=8) as c:
+            r = await c.get(url, params={"overview": "full", "geometries": "geojson", "steps": "false"})
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        routes = data.get("routes") or []
+        if not routes:
+            return None
+        coords_lonlat = (((routes[0] or {}).get("geometry") or {}).get("coordinates")) or []
+        # GeoJSON is [lon, lat]; we hand the frontend [lat, lng] so it can
+        # feed Leaflet directly without flipping each pair on render.
+        return [[c[1], c[0]] for c in coords_lonlat if len(c) >= 2]
+    except Exception:
+        return None
+
+
+@api.get("/trips/{trip_id}/route-geometry")
+async def trip_route_geometry(trip_id: str, user: dict = Depends(get_current_user)):
+    """Return the road-following polyline for a trip as `[[lat, lng], ...]`.
+
+    Cached on the trip document under `route_geometry`. The cache key is the
+    sequence of waypoints (start + waypoints + end) so editing the route
+    invalidates the cache. Members + organisers + public-trip viewers can
+    fetch — anyone authorised to see the trip can see its line.
+    """
+    doc = await db.trips.find_one({"id": trip_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    is_organiser = doc["user_id"] == user["id"]
+    is_confirmed_crew = user["id"] in (doc.get("crew_ids") or [])
+    if not is_organiser and not is_confirmed_crew and not doc.get("is_public"):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    waypoints = [doc.get("start"), *(doc.get("waypoints") or []), doc.get("end")]
+    waypoints = [w for w in waypoints if w and w.get("lat") is not None]
+    # Cache fingerprint — bumping this if the polyline algorithm changes
+    # avoids serving stale geometry from the doc.
+    fingerprint = "|".join(f"{round(w['lat'],4)},{round(w['lng'],4)}" for w in waypoints) + ":v1"
+
+    cached = doc.get("route_geometry") or {}
+    if cached.get("fingerprint") == fingerprint and cached.get("coords"):
+        return {"coords": cached["coords"], "source": "cache"}
+
+    coords = await _fetch_osrm_geometry(waypoints)
+    if coords is None:
+        # OSRM failed — fall back to straight-line waypoints. We don't cache
+        # this so the next call retries the upstream.
+        return {"coords": [[w["lat"], w["lng"]] for w in waypoints], "source": "fallback"}
+
+    await db.trips.update_one(
+        {"id": trip_id},
+        {"$set": {"route_geometry": {"fingerprint": fingerprint, "coords": coords, "fetched_at": now_iso()}}},
+    )
+    return {"coords": coords, "source": "osrm"}
+
+
 @api.patch("/trips/{trip_id}", response_model=Trip)
 async def update_trip(trip_id: str, body: TripUpdate, user: dict = Depends(get_current_user)):
     doc = await db.trips.find_one({"id": trip_id}, {"_id": 0})

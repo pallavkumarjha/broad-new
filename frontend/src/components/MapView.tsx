@@ -19,7 +19,7 @@ export type LiveMarker = {
   stale?: boolean;      // grayscale, half opacity (last fix > 30s ago)
 };
 
-function buildHtml(points: Pt[], dark: boolean) {
+function buildHtml(points: Pt[], dark: boolean, routeCoords?: [number, number][]) {
   const tile = dark
     ? 'https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png'
     : 'https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png';
@@ -31,6 +31,10 @@ function buildHtml(points: Pt[], dark: boolean) {
   const bg = dark ? '#0A0A0A' : '#F7F5F0';
   const sosColor = '#E0533D';
   const ptsJson = JSON.stringify(points);
+  // routeCoords (when provided) draws the actual road path returned by OSRM;
+  // we still keep the straight-line polyline so even without geometry the
+  // viewer sees something meaningful.
+  const routeJson = JSON.stringify(routeCoords || []);
   return `<!doctype html><html><head>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
@@ -60,13 +64,19 @@ function buildHtml(points: Pt[], dark: boolean) {
     L.tileLayer('${labelTile}', { subdomains:'abcd', maxZoom:19, opacity:0.8 }).addTo(map);
     if (pts.length) {
       const latlngs = pts.map(p => [p.lat, p.lng]);
-      L.polyline(latlngs, { color:'${route}', weight:3, opacity:0.9 }).addTo(map);
+      const roadCoords = ${routeJson};
+      // Prefer the road-following geometry if we have it. Falling back to the
+      // waypoint polyline keeps the map populated even if OSRM is down.
+      const lineCoords = (roadCoords && roadCoords.length >= 2) ? roadCoords : latlngs;
+      L.polyline(lineCoords, { color:'${route}', weight:3, opacity:0.9 }).addTo(map);
       pts.forEach((p,i) => {
         const isEnd = (i===0 || i===pts.length-1);
         const icon = L.divIcon({ className:'', html:'<div class="pin'+(isEnd?'':' way')+'"></div>', iconSize:[14,14], iconAnchor:[7,7] });
         L.marker([p.lat, p.lng], { icon }).addTo(map);
       });
-      map.fitBounds(latlngs, { padding:[28,28], maxZoom:11 });
+      // Fit to whichever polyline we drew so the camera frames the actual
+      // road (which may bow significantly outside the straight-line bbox).
+      map.fitBounds(lineCoords, { padding:[28,28], maxZoom:11 });
     }
 
     // Live marker registry — keyed by id so we can diff updates instead of
@@ -155,6 +165,7 @@ export function MapView({
   dark = false,
   liveMarker,
   markers,
+  routeCoords,
 }: {
   points: Pt[];
   width?: number;
@@ -164,10 +175,13 @@ export function MapView({
   liveMarker?: Pt;
   /** Crew + self markers. Diffed by `id` inside the WebView. */
   markers?: LiveMarker[];
+  /** Road-following geometry — `[[lat, lng], ...]`. Replaces the straight-line
+   *  polyline between waypoints when present. Fetched lazily from the backend. */
+  routeCoords?: [number, number][];
 }) {
-  // HTML only depends on points + dark (stable during Live Ride); markers are
-  // pushed in via postMessage so we never re-render the whole map.
-  const html = useMemo(() => buildHtml(points, dark), [points, dark]);
+  // HTML only depends on points + dark + routeCoords (stable during Live Ride);
+  // markers are pushed in via postMessage so we never re-render the whole map.
+  const html = useMemo(() => buildHtml(points, dark, routeCoords), [points, dark, routeCoords]);
   const t = dark ? colors.dark : colors.light;
   const iframeRef = useRef<any>(null);
   const webViewRef = useRef<any>(null);
