@@ -80,6 +80,15 @@ export default function Home() {
     (r: any) => r.status === 'approved' && (r.trip_status === 'planned' || r.trip_status === 'active')
   );
 
+  // Unread notification badge — polled lightly; refetched on focus by RQ defaults.
+  const unreadQuery = useQuery<{ count: number }>({
+    queryKey: ['notifications', 'unread-count'],
+    queryFn: async () => (await api.get('/notifications/unread-count')).data,
+    refetchInterval: 30000,
+    placeholderData: (prev) => prev,
+  });
+  const unreadCount = unreadQuery.data?.count ?? 0;
+
   const upcoming = planned.slice(0, 3);
 
   // Live dot pulse
@@ -115,10 +124,28 @@ export default function Home() {
 
         {/* ── Header ────────────────────────────────────────────── */}
         <View style={styles.header}>
-          <Eyebrow>{greet()} · {new Date().toDateString().toUpperCase()}</Eyebrow>
-          <Text style={[type.h1, { color: colors.light.ink, marginTop: space.xs }]}>
-            {user?.name?.split(' ')[0] || 'Rider'}.
-          </Text>
+          <View style={{ flex: 1 }}>
+            <Eyebrow>{greet()} · {new Date().toDateString().toUpperCase()}</Eyebrow>
+            <Text style={[type.h1, { color: colors.light.ink, marginTop: space.xs }]}>
+              {user?.name?.split(' ')[0] || 'Rider'}.
+            </Text>
+          </View>
+          <TouchableOpacity
+            testID="home-notifications-btn"
+            accessibilityLabel="Notifications"
+            onPress={() => router.push('/notifications' as any)}
+            style={styles.bellBtn}
+            activeOpacity={0.7}
+          >
+            <Feather name="bell" size={22} color={colors.light.ink} />
+            {unreadCount > 0 && (
+              <View style={styles.bellBadge} testID="home-notifications-badge">
+                <Text style={styles.bellBadgeText}>
+                  {unreadCount > 9 ? '9+' : String(unreadCount)}
+                </Text>
+              </View>
+            )}
+          </TouchableOpacity>
         </View>
 
         {/* ── Stats strip ───────────────────────────────────────── */}
@@ -375,7 +402,39 @@ export default function Home() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.light.bg },
-  header: { paddingHorizontal: space.lg, paddingTop: space.lg, paddingBottom: space.md },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    paddingHorizontal: space.lg,
+    paddingTop: space.lg,
+    paddingBottom: space.md,
+  },
+  bellBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 4,
+  },
+  bellBadge: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    paddingHorizontal: 4,
+    backgroundColor: colors.light.amber,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bellBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 9,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+  },
 
   statsRow: {
     flexDirection: 'row',

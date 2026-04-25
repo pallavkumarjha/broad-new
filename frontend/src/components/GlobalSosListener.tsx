@@ -4,6 +4,21 @@ import { useRouter } from 'expo-router';
 import { api, storage, TOKEN_KEY } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
 
+// Live SOS convoy WebSocket. Disabled by default in production because the
+// REST proxy at broad-homepage.vercel.app does not tunnel WebSocket upgrades
+// (Vercel serverless limitation), so connecting would loop forever and drain
+// battery. SOS alerts still reach devices via Expo push (handled in
+// app/_layout.tsx) — the inbox + banner cover the alert path. To re-enable
+// the live in-app popup, set EXPO_PUBLIC_WS_URL to a host that supports WS
+// (e.g. Railway directly: wss://broad-backend.up.railway.app).
+const WS_BASE = (() => {
+  const ws = process.env.EXPO_PUBLIC_WS_URL;
+  if (ws) return ws.replace(/^http/, 'ws');
+  return null;
+})();
+
+const MAX_RECONNECTS = 3;
+
 type SocketMap = Record<string, WebSocket>;
 
 export function GlobalSosListener() {
@@ -11,13 +26,17 @@ export function GlobalSosListener() {
   const router = useRouter();
   const socketsRef = useRef<SocketMap>({});
   const seenSosRef = useRef<Set<string>>(new Set());
+  const retriesRef = useRef<Record<string, number>>({});
 
   useEffect(() => {
+    if (!WS_BASE) return; // push-only mode — short-circuit
+
     const closeAll = () => {
       for (const ws of Object.values(socketsRef.current)) {
         try { ws.close(); } catch {}
       }
       socketsRef.current = {};
+      retriesRef.current = {};
     };
 
     if (loading || !user) {
@@ -40,16 +59,16 @@ export function GlobalSosListener() {
           if (!activeTripIds.has(tripId)) {
             try { ws.close(); } catch {}
             delete socketsRef.current[tripId];
+            delete retriesRef.current[tripId];
           }
         }
 
-        const base = process.env.EXPO_PUBLIC_BACKEND_URL || '';
-        const wsBase = base.replace(/^http/, 'ws');
-
         for (const tripId of activeTripIds) {
           if (socketsRef.current[tripId]) continue;
+          if ((retriesRef.current[tripId] ?? 0) >= MAX_RECONNECTS) continue;
           try {
-            const ws = new WebSocket(`${wsBase}/api/ws/convoy/${tripId}?token=${encodeURIComponent(token)}`);
+            const ws = new WebSocket(`${WS_BASE}/api/ws/convoy/${tripId}?token=${encodeURIComponent(token)}`);
+            ws.onopen = () => { retriesRef.current[tripId] = 0; };
             ws.onmessage = (e) => {
               try {
                 const d = JSON.parse(e.data);
@@ -70,7 +89,10 @@ export function GlobalSosListener() {
             };
             ws.onclose = () => {
               if (socketsRef.current[tripId] === ws) delete socketsRef.current[tripId];
-              if (!cancelled) setTimeout(() => { syncActiveTripSockets(); }, 1000);
+              retriesRef.current[tripId] = (retriesRef.current[tripId] ?? 0) + 1;
+              if (cancelled || retriesRef.current[tripId] >= MAX_RECONNECTS) return;
+              const backoff = 1000 * Math.pow(2, retriesRef.current[tripId]); // 2s, 4s, 8s
+              setTimeout(() => { syncActiveTripSockets(); }, backoff);
             };
             socketsRef.current[tripId] = ws;
           } catch {}
@@ -81,7 +103,10 @@ export function GlobalSosListener() {
     syncActiveTripSockets();
     const interval = setInterval(syncActiveTripSockets, 30000);
     const appStateSub = AppState.addEventListener('change', (state) => {
-      if (state === 'active') syncActiveTripSockets();
+      if (state === 'active') {
+        retriesRef.current = {}; // reset budget on foreground
+        syncActiveTripSockets();
+      }
     });
 
     return () => {

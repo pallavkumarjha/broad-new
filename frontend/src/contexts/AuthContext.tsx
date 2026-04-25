@@ -56,6 +56,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const { data } = await api.get('/auth/me');
       setUser(data);
+      // Re-register push token on every app launch — handles permission grants,
+      // device changes, and token rotation. Backend upserts so it's safe to spam.
+      _registerPushToken();
     } catch {
       await storage.deleteItem(TOKEN_KEY);
       setUser(null);
