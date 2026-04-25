@@ -552,6 +552,14 @@ async def update_trip(trip_id: str, body: TripUpdate, user: dict = Depends(get_c
             {"$inc": {"stats.total_km": km, "stats.trips_completed": 1}},
         )
     await db.trips.update_one({"id": trip_id}, {"$set": update})
+    # If the trip just transitioned to completed/cancelled, evict everyone from the
+    # convoy WS room. Otherwise their clients keep broadcasting position to a
+    # zombie room until they manually close the screen.
+    if body.status in ("completed", "cancelled"):
+        try:
+            await hub.end_trip(trip_id)
+        except Exception:
+            pass
     fresh = await db.trips.find_one({"id": trip_id}, {"_id": 0})
     return trip_from_doc(fresh)
 
@@ -787,6 +795,12 @@ async def leave_trip(trip_id: str, user: dict = Depends(get_current_user)):
         {"id": trip_id},
         {"$pull": {"crew_ids": user["id"], "crew": name}},
     )
+    # Boot from convoy WS room — they're no longer a member, shouldn't keep
+    # broadcasting position or seeing other riders.
+    try:
+        await hub.force_disconnect(trip_id, user["id"])
+    except Exception:
+        pass
     # Notify organiser quietly
     import asyncio
     asyncio.ensure_future(_push_to_users(
@@ -816,6 +830,12 @@ async def remove_trip_rider(trip_id: str, uid: str, user: dict = Depends(get_cur
         {"id": trip_id},
         {"$pull": {"crew_ids": uid, "crew": removed_name}},
     )
+    # Boot the removed rider from the convoy WS room immediately so they stop
+    # broadcasting and other riders see them disappear from the map.
+    try:
+        await hub.force_disconnect(trip_id, uid)
+    except Exception:
+        pass
     import asyncio
     asyncio.ensure_future(_push_to_users(
         [uid],
@@ -1138,14 +1158,26 @@ app.include_router(api)
 
 
 # ---------- WebSocket convoy (real-time positions) ----------
+# Sanity bounds for inbound GPS samples. Reject anything outside these.
+# Tuned for motorcycle / car use: 250 km/h cap rejects teleports from cell
+# tower fallback; 100m accuracy cap drops indoor-wifi-only fixes that would
+# render the rider 200m off the actual road.
+_MAX_SPEED_KMH = 250
+_MAX_ACCURACY_M = 100
+
+
 class ConvoyHub:
     """In-memory pub/sub for live trip positions + SOS alerts.
 
     State shape:
       rooms[trip_id][user_id] = {
-        name, lat, lng, speed_kmh, updated_at,
+        name, lat, lng, speed_kmh, heading_deg, accuracy_m, updated_at,
         sockets: {conn_id: WebSocket}
       }
+
+    Persistence: none. State lost on restart — riders reconnect and repopulate
+    via their next pos broadcast. Acceptable since "now" is the only relevant
+    time for live tracking.
     """
 
     def __init__(self) -> None:
@@ -1156,7 +1188,16 @@ class ConvoyHub:
         room = self.rooms.setdefault(trip_id, {})
         rider = room.setdefault(
             user_id,
-            {"name": name, "lat": None, "lng": None, "speed_kmh": 0, "updated_at": now_iso(), "sockets": {}},
+            {
+                "name": name,
+                "lat": None,
+                "lng": None,
+                "speed_kmh": 0,
+                "heading_deg": 0,
+                "accuracy_m": None,
+                "updated_at": now_iso(),
+                "sockets": {},
+            },
         )
         rider["name"] = name
         conn_id = str(uuid.uuid4())
@@ -1177,15 +1218,82 @@ class ConvoyHub:
         if not room:
             self.rooms.pop(trip_id, None)
 
-    async def update(self, trip_id: str, user_id: str, data: dict) -> None:
+    async def force_disconnect(self, trip_id: str, user_id: str, code: int = 4410) -> None:
+        """Boot a user from the room — used when a rider is removed from the trip
+        or the trip ends. Closes all their sockets, prunes state, broadcasts new
+        member list to everyone else."""
+        room = self.rooms.get(trip_id)
+        if not room:
+            return
+        rider = room.get(user_id)
+        if not rider:
+            return
+        for ws in list((rider.get("sockets") or {}).values()):
+            try:
+                await ws.close(code=code)
+            except Exception:
+                pass
+        room.pop(user_id, None)
+        if not room:
+            self.rooms.pop(trip_id, None)
+        await self.broadcast_state(trip_id)
+
+    async def end_trip(self, trip_id: str) -> None:
+        """Notify everyone the trip ended, then close all sockets for that trip."""
+        await self._fanout(trip_id, {"type": "trip_ended"})
+        room = self.rooms.pop(trip_id, None) or {}
+        for rider in room.values():
+            for ws in list((rider.get("sockets") or {}).values()):
+                try:
+                    await ws.close(code=4411)
+                except Exception:
+                    pass
+
+    async def update(self, trip_id: str, user_id: str, data: dict) -> bool:
+        """Apply a position update. Returns True if applied, False if rejected.
+
+        Rejection reasons:
+        - lat/lng missing or non-numeric
+        - lat/lng out of range
+        - accuracy worse than `_MAX_ACCURACY_M`
+        - speed greater than `_MAX_SPEED_KMH` (teleport / GPS spike)
+        """
         room = self.rooms.get(trip_id, {})
         if user_id not in room:
-            return
-        room[user_id]["lat"] = data.get("lat")
-        room[user_id]["lng"] = data.get("lng")
-        room[user_id]["speed_kmh"] = data.get("speed_kmh", 0)
-        room[user_id]["updated_at"] = now_iso()
+            return False
+        try:
+            lat = float(data["lat"])
+            lng = float(data["lng"])
+        except (KeyError, TypeError, ValueError):
+            return False
+        if not (-90 <= lat <= 90 and -180 <= lng <= 180):
+            return False
+        speed = float(data.get("speed_kmh") or 0)
+        if speed < 0 or speed > _MAX_SPEED_KMH:
+            return False
+        accuracy = data.get("accuracy_m")
+        if accuracy is not None:
+            try:
+                accuracy = float(accuracy)
+                if accuracy > _MAX_ACCURACY_M:
+                    return False
+            except (TypeError, ValueError):
+                accuracy = None
+        heading = data.get("heading_deg")
+        try:
+            heading = float(heading) if heading is not None else 0.0
+        except (TypeError, ValueError):
+            heading = 0.0
+
+        rider = room[user_id]
+        rider["lat"] = lat
+        rider["lng"] = lng
+        rider["speed_kmh"] = speed
+        rider["heading_deg"] = heading
+        rider["accuracy_m"] = accuracy
+        rider["updated_at"] = now_iso()
         await self.broadcast_state(trip_id)
+        return True
 
     async def _fanout(self, trip_id: str, payload: dict) -> None:
         """Send payload to every socket in the room. Prune any that fail."""
@@ -1217,6 +1325,8 @@ class ConvoyHub:
                 "lat": r["lat"],
                 "lng": r["lng"],
                 "speed_kmh": r["speed_kmh"],
+                "heading_deg": r.get("heading_deg", 0),
+                "accuracy_m": r.get("accuracy_m"),
                 "online": True,
                 "updated_at": r["updated_at"],
             }
