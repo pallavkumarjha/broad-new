@@ -790,33 +790,6 @@ async def my_trip_requests(user: dict = Depends(get_current_user)):
 
 
 # ---------- Convoy (mocked) ----------
-@api.get("/trips/{trip_id}/convoy")
-async def convoy(trip_id: str, user: dict = Depends(get_current_user)):
-    doc = await db.trips.find_one({"id": trip_id}, {"_id": 0})
-    if not doc:
-        raise HTTPException(status_code=404, detail="Trip not found")
-    crew_names = doc.get("crew", []) or ["Rhea", "Kabir", "Ishaan", "Maya"]
-    base_lat = doc.get("start", {}).get("lat", 28.6)
-    base_lng = doc.get("start", {}).get("lng", 77.2)
-    import random
-    random.seed(trip_id)
-    members = []
-    statuses = ["lead", "ok", "ok", "sweep"]
-    for i, n in enumerate(crew_names[:6]):
-        members.append({
-            "name": n,
-            "lat": base_lat + random.uniform(-0.05, 0.05),
-            "lng": base_lng + random.uniform(-0.05, 0.05),
-            "speed_kmh": random.randint(40, 90),
-            "fuel_pct": random.randint(20, 95),
-            "battery_pct": random.randint(30, 99),
-            "position": statuses[i % len(statuses)],
-            "online": True,
-        })
-    spread_km = round(random.uniform(0.4, 4.2), 1)
-    return {"members": members, "spread_km": spread_km, "updated_at": now_iso()}
-
-
 # ---------- Push token ----------
 @api.post("/users/me/push-token")
 async def save_push_token(body: PushTokenIn, user: dict = Depends(get_current_user)):
@@ -1078,8 +1051,17 @@ app.include_router(api)
 
 # ---------- WebSocket convoy (real-time positions) ----------
 class ConvoyHub:
+    """In-memory pub/sub for live trip positions + SOS alerts.
+
+    State shape:
+      rooms[trip_id][user_id] = {
+        name, lat, lng, speed_kmh, updated_at,
+        sockets: {conn_id: WebSocket}
+      }
+    """
+
     def __init__(self) -> None:
-        self.rooms: dict = {}
+        self.rooms: dict[str, dict[str, dict]] = {}
 
     async def join(self, trip_id: str, user_id: str, name: str, ws: WebSocket) -> str:
         await ws.accept()
@@ -1117,23 +1099,9 @@ class ConvoyHub:
         room[user_id]["updated_at"] = now_iso()
         await self.broadcast_state(trip_id)
 
-    def _drop_dead_connection(self, trip_id: str, user_id: str, conn_id: str) -> None:
-        room = self.rooms.get(trip_id)
-        if not room:
-            return
-        rider = room.get(user_id)
-        if not rider:
-            return
-        rider.get("sockets", {}).pop(conn_id, None)
-        if not rider.get("sockets"):
-            room.pop(user_id, None)
-        if not room:
-            self.rooms.pop(trip_id, None)
-
-    async def broadcast_sos(self, trip_id: str, sender_name: str, sender_user_id: str, sos_id: str) -> None:
-        """Push a real-time SOS alert to every connected WebSocket in the room."""
+    async def _fanout(self, trip_id: str, payload: dict) -> None:
+        """Send payload to every socket in the room. Prune any that fail."""
         room = self.rooms.get(trip_id, {})
-        payload = {"type": "sos", "sender": sender_name, "sender_user_id": sender_user_id, "sos_id": sos_id}
         dead: list[tuple[str, str]] = []
         for uid, rider in list(room.items()):
             for conn_id, ws in list((rider.get("sockets") or {}).items()):
@@ -1142,7 +1110,15 @@ class ConvoyHub:
                 except Exception:
                     dead.append((uid, conn_id))
         for uid, conn_id in dead:
-            self._drop_dead_connection(trip_id, uid, conn_id)
+            self.leave(trip_id, uid, conn_id)
+
+    async def broadcast_sos(self, trip_id: str, sender_name: str, sender_user_id: str, sos_id: str) -> None:
+        await self._fanout(trip_id, {
+            "type": "sos",
+            "sender": sender_name,
+            "sender_user_id": sender_user_id,
+            "sos_id": sos_id,
+        })
 
     async def broadcast_state(self, trip_id: str) -> None:
         room = self.rooms.get(trip_id, {})
@@ -1158,16 +1134,7 @@ class ConvoyHub:
             }
             for uid, r in room.items()
         ]
-        payload = {"type": "state", "members": members}
-        dead: list[tuple[str, str]] = []
-        for uid, rider in list(room.items()):
-            for conn_id, ws in list((rider.get("sockets") or {}).items()):
-                try:
-                    await ws.send_json(payload)
-                except Exception:
-                    dead.append((uid, conn_id))
-        for uid, conn_id in dead:
-            self._drop_dead_connection(trip_id, uid, conn_id)
+        await self._fanout(trip_id, {"type": "state", "members": members})
 
 
 hub = ConvoyHub()
@@ -1175,7 +1142,7 @@ hub = ConvoyHub()
 
 @app.websocket("/api/ws/convoy/{trip_id}")
 async def ws_convoy(ws: WebSocket, trip_id: str, token: str = ""):
-    # Manual auth via query param
+    # 1. Verify JWT (passed as query param — Web/RN WebSocket APIs don't support custom headers).
     try:
         payload = pyjwt.decode(token, get_jwt_secret(), algorithms=[JWT_ALGO])
         uid = payload["sub"]
@@ -1186,6 +1153,21 @@ async def ws_convoy(ws: WebSocket, trip_id: str, token: str = ""):
     if not u:
         await ws.close(code=4403)
         return
+
+    # 2. Verify trip exists, user is a member, and trip is active.
+    # Members = organizer (user_id) OR confirmed crew (crew_ids).
+    trip = await db.trips.find_one({"id": trip_id}, {"_id": 0, "user_id": 1, "crew_ids": 1, "status": 1})
+    if not trip:
+        await ws.close(code=4404)
+        return
+    is_member = (trip.get("user_id") == uid) or (uid in (trip.get("crew_ids") or []))
+    if not is_member:
+        await ws.close(code=4403)
+        return
+    if trip.get("status") != "active":
+        await ws.close(code=4409)  # 4409 = trip not active
+        return
+
     name = u.get("name", "Rider")
     conn_id = await hub.join(trip_id, uid, name, ws)
     try:

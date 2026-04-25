@@ -13,16 +13,16 @@ import { MapView } from '../../src/components/MapView';
 import { SOSButton } from '../../src/components/SOSButton';
 
 // Live Ride — DARK MODE instrument panel.
-// Mocks GPS movement along the route and ticks a speedometer.
+// All telemetry sourced from real GPS. No mock simulation.
 export default function LiveRide() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const { settings } = useSettings();
   const [trip, setTrip] = useState<any>(null);
-  const [convoy, setConvoy] = useState<any>({ members: [], spread_km: 0 });
-  const [progress, setProgress] = useState(0); // 0..1 along route
-  const [speed, setSpeed] = useState(62);
-  const [displaySpeed, setDisplaySpeed] = useState(62);
+  const [convoy, setConvoy] = useState<any>({ members: [] });
+  const [progress, setProgress] = useState(0); // 0..1 along route — derived from GPS distance vs trip total
+  const [speed, setSpeed] = useState(0);
+  const [displaySpeed, setDisplaySpeed] = useState(0);
   const [topSpeed, setTopSpeed] = useState(0);
   const [elapsed, setElapsed] = useState(0); // seconds
   const [gpsActive, setGpsActive] = useState(false);
@@ -33,15 +33,12 @@ export default function LiveRide() {
   const accelSub = useRef<any>(null);
   const lastAccel = useRef({ x: 0, y: 0, z: 0 });
   const crashHandled = useRef(false);
-  const speedAnim = useRef(new Animated.Value(62)).current;
+  const speedAnim = useRef(new Animated.Value(0)).current;
   const progressAnim = useRef(new Animated.Value(0)).current;
   // Refs so triggerSos (defined via useCallback below) always has fresh values
   // even when called from long-lived effects (crash detection, auto-SOS timer).
   const liveMarkerRef = useRef<{ lat: number; lng: number }>({ lat: 0, lng: 0 });
-  const speedRef = useRef(62);
-  // Tracks whether GPS is actually delivering valid speed values. When false the
-  // mock tick keeps running so the instrument panel stays alive.
-  const gpsSpeedActiveRef = useRef(false);
+  const speedRef = useRef(0);
 
   // Keep speedRef in sync so triggerSos always has the latest reading.
   useEffect(() => { speedRef.current = speed; }, [speed]);
@@ -100,26 +97,13 @@ export default function LiveRide() {
     })();
   }, [id]);
 
-  // Mock telemetry tick. Progress simulation stops once real GPS kicks in.
-  // Speed simulation keeps running until the device actually reports a valid
-  // speed value — many phones return -1 / null for coords.speed even when
-  // location is active (especially at low speeds or indoors).
+  // Elapsed-time tick. Speed + progress now sourced from GPS only.
   useEffect(() => {
     const t = setInterval(() => {
       setElapsed(Math.floor((Date.now() - startedAt.current) / 1000));
-      if (!gpsActive) {
-        setProgress(p => Math.min(1, p + 0.0015));
-      }
-      if (!gpsSpeedActiveRef.current) {
-        setSpeed(s => {
-          const ns = Math.max(0, Math.min(120, s + (Math.random() - 0.5) * 18));
-          setTopSpeed(ts => Math.max(ts, ns));
-          return Math.round(ns);
-        });
-      }
-    }, 1500);
+    }, 1000);
     return () => clearInterval(t);
-  }, [gpsActive]);
+  }, []);
 
   // Real GPS (native) or browser geolocation (web) — graceful fallback
   useEffect(() => {
@@ -137,8 +121,7 @@ export default function LiveRide() {
                 const raw = pos.coords.speed ?? -1;
                 if (raw >= 0) {
                   const sp = Math.round(raw * 3.6);
-                  gpsSpeedActiveRef.current = true;
-                  setSpeed(sp);
+                  setSpeed(Math.max(0, sp));
                   setTopSpeed(ts => Math.max(ts, sp));
                 }
               },
@@ -156,12 +139,11 @@ export default function LiveRide() {
                 if (cancelled) return;
                 setGpsActive(true);
                 setRealPos({ lat: pos.coords.latitude, lng: pos.coords.longitude });
-                // On iOS coords.speed is -1 when unknown; on Android it can be
-                // null. Only switch off the mock once we get a valid reading.
+                // iOS reports -1 / Android reports null when speed not yet
+                // resolved. Only consume valid readings.
                 const raw = pos.coords.speed ?? -1;
                 if (raw >= 0) {
                   const sp = Math.round(raw * 3.6);
-                  gpsSpeedActiveRef.current = true;
                   setSpeed(Math.max(0, sp));
                   setTopSpeed(ts => Math.max(ts, sp));
                 }
@@ -218,10 +200,7 @@ export default function LiveRide() {
           try {
             const d = JSON.parse(e.data);
             if (d.type === 'state' && alive) {
-              setConvoy((c: any) => ({ ...c, members: d.members.map((m: any) => ({
-                name: m.name, lat: m.lat, lng: m.lng, speed_kmh: m.speed_kmh, position: 'live', online: m.online,
-                fuel_pct: Math.round(40 + (m.name.charCodeAt(0) * 13) % 60), battery_pct: 80,
-              })) }));
+              setConvoy({ members: d.members });
             }
           } catch {}
         };
@@ -230,33 +209,24 @@ export default function LiveRide() {
     return () => { alive = false; try { wsRef.current?.close(); } catch {} };
   }, [id]);
 
-  // Broadcast own position periodically
+  // Broadcast own GPS position to convoy. Skip if no real fix yet — never send
+  // interpolated/mock coords (would mislead the rest of the crew on the map).
   useEffect(() => {
     const t = setInterval(() => {
       const ws = wsRef.current;
       if (!ws || ws.readyState !== 1) return;
-      const pos = realPos || (() => {
-        if (!trip) return null;
-        const all = [trip.start, ...(trip.waypoints || []), trip.end];
-        const segs = all.length - 1;
-        const segLen = 1 / segs;
-        const i = Math.min(segs - 1, Math.floor(progress / segLen));
-        const t2 = (progress - i * segLen) / segLen;
-        return { lat: all[i].lat + (all[i + 1].lat - all[i].lat) * t2, lng: all[i].lng + (all[i + 1].lng - all[i].lng) * t2 };
-      })();
-      if (!pos) return;
-      try { ws.send(JSON.stringify({ type: 'pos', lat: pos.lat, lng: pos.lng, speed_kmh: speed })); } catch {}
+      if (!realPos) return;
+      try {
+        ws.send(JSON.stringify({
+          type: 'pos',
+          lat: realPos.lat,
+          lng: realPos.lng,
+          speed_kmh: speed,
+        }));
+      } catch {}
     }, 3000);
     return () => clearInterval(t);
-  }, [trip, progress, speed, realPos]);
-
-  // Fallback convoy fetch once (so we still see something if nobody else is online)
-  useEffect(() => {
-    (async () => {
-      if (!id) return;
-      try { const c = await api.get(`/trips/${id}/convoy`); setConvoy(c.data); } catch {}
-    })();
-  }, [id]);
+  }, [speed, realPos]);
 
   const { width: screenWidth } = useWindowDimensions();
 
@@ -265,14 +235,9 @@ export default function LiveRide() {
   }
 
   const allPoints = [trip.start, ...(trip.waypoints || []), trip.end].filter(Boolean);
-  // interpolate position (fallback) or use real GPS
-  const segs = Math.max(1, allPoints.length - 1);
-  const segLen = 1 / segs;
-  const segIdx = Math.min(segs - 1, Math.floor(progress / segLen));
-  const segT = (progress - segIdx * segLen) / segLen;
-  const a = allPoints[segIdx] ?? { lat: 0, lng: 0 };
-  const b = allPoints[segIdx + 1] ?? a;
-  const liveMarker = realPos || { lat: a.lat + (b.lat - a.lat) * segT, lng: a.lng + (b.lng - a.lng) * segT };
+  // Live marker shows ONLY real GPS — no interpolated/mock position.
+  // Falls back to trip start so the map still has a valid centroid before first fix.
+  const liveMarker = realPos || allPoints[0] || { lat: 0, lng: 0 };
   // Keep ref in sync so triggerSos always has the latest position without
   // needing to be in the effect deps array.
   liveMarkerRef.current = liveMarker;
@@ -304,7 +269,7 @@ export default function LiveRide() {
       <SafeAreaView style={{ flex: 1 }} edges={['top', 'bottom']}>
           <View style={styles.header}>
             <TouchableOpacity onPress={() => router.back()} testID="ride-close-btn"><Feather name="x" size={22} color={colors.dark.ink} /></TouchableOpacity>
-            <Eyebrow color={colors.dark.amber}>● LIVE — {trip.name.toUpperCase()} {gpsActive ? '· GPS' : '· SIM'}</Eyebrow>
+            <Eyebrow color={colors.dark.amber}>● LIVE — {trip.name.toUpperCase()} {gpsActive ? '· GPS' : '· WAITING FOR FIX'}</Eyebrow>
             <TouchableOpacity onPress={endTrip} testID="ride-end-btn"><Meta style={{ color: colors.dark.amber }}>END</Meta></TouchableOpacity>
           </View>
           {/* M2 — Ride progress hairline */}
@@ -340,20 +305,19 @@ export default function LiveRide() {
             </View>
           </View>
 
-          {/* Convoy spread */}
+          {/* Convoy roster — live from WebSocket */}
           <View style={styles.darkBlock}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
               <Eyebrow color={colors.dark.inkMuted}>CONVOY — {convoy.members.length}</Eyebrow>
-              <Meta style={{ color: colors.dark.amber }}>SPREAD {convoy.spread_km} KM</Meta>
             </View>
-            {convoy.members.map((m: any, i: number) => (
-              <View key={i} style={styles.convoyRow}>
+            {convoy.members.map((m: any) => (
+              <View key={m.user_id} style={styles.convoyRow}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                   <View style={[styles.statusDot, { backgroundColor: m.online ? colors.dark.safe : colors.dark.inkMuted }]} />
                   <Text style={[type.body, { color: colors.dark.ink }]}>{m.name}</Text>
-                  <Meta style={{ color: colors.dark.inkMuted }}>· {m.position.toUpperCase()}</Meta>
+                  <Meta style={{ color: colors.dark.inkMuted }}>· {m.lat != null && m.lng != null ? 'LIVE' : 'NO FIX'}</Meta>
                 </View>
-                <Meta style={{ color: colors.dark.ink }}>{m.speed_kmh} KM/H · ⛽ {m.fuel_pct}%</Meta>
+                <Meta style={{ color: colors.dark.ink }}>{m.speed_kmh} KM/H</Meta>
               </View>
             ))}
           </View>
