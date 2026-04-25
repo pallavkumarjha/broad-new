@@ -1,10 +1,11 @@
-import React from 'react';
-import { Stack } from 'expo-router';
+import React, { useEffect } from 'react';
+import { Stack, useRouter } from 'expo-router';
 import { useFonts as useFraunces, Fraunces_400Regular, Fraunces_500Medium, Fraunces_600SemiBold, Fraunces_700Bold } from '@expo-google-fonts/fraunces';
 import { useFonts as useMono, JetBrainsMono_400Regular, JetBrainsMono_500Medium } from '@expo-google-fonts/jetbrains-mono';
-import { View, Text } from 'react-native';
+import { View, Text, Platform } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
+import * as Notifications from 'expo-notifications';
 import { AuthProvider } from '../src/contexts/AuthContext';
 import { SettingsProvider } from '../src/contexts/SettingsContext';
 import { colors } from '../src/theme/tokens';
@@ -12,9 +13,64 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClient } from '../src/lib/queryClient';
 import { GlobalSosListener } from '../src/components/GlobalSosListener';
 
+// ── Notification display handler ──────────────────────────────────────────────
+// Controls how notifications appear when the app is in the foreground.
+// Must be set at module level (before any component mounts).
+if (Platform.OS !== 'web') {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowAlert: true,
+      shouldPlaySound: true,
+      shouldSetBadge: false,
+      shouldShowBanner: true,
+      shouldShowList: false,
+    }),
+  });
+}
+
+// ── Navigate based on notification payload ────────────────────────────────────
+function useNotificationNavigation() {
+  const router = useRouter();
+
+  const navigate = React.useCallback((data: Record<string, any> | undefined) => {
+    if (!data) return;
+    const { type, trip_id, sos_id } = data as any;
+    if (type === 'sos' && sos_id)                                      router.push(`/sos/${sos_id}` as any);
+    else if (trip_id && (
+      type === 'trip_request' ||
+      type === 'trip_request_approved' ||
+      type === 'trip_request_declined' ||
+      type === 'trip_left' ||
+      type === 'trip_removed' ||
+      type === 'trip_started'
+    ))                                                                  router.push(`/trip/${trip_id}` as any);
+  }, [router]);
+
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+
+    // App was killed — user tapped notification to open it.
+    // Small delay lets Expo Router finish mounting the navigator before we push.
+    Notifications.getLastNotificationResponseAsync().then((response) => {
+      if (response) {
+        setTimeout(() => navigate(response.notification.request.content.data as any), 300);
+      }
+    });
+
+    // App was backgrounded — user tapped notification while it was suspended.
+    const sub = Notifications.addNotificationResponseReceivedListener((response) => {
+      navigate(response.notification.request.content.data as any);
+    });
+
+    return () => sub.remove();
+  }, [navigate]);
+}
+
 export default function RootLayout() {
   const [f1] = useFraunces({ Fraunces_400Regular, Fraunces_500Medium, Fraunces_600SemiBold, Fraunces_700Bold });
   const [f2] = useMono({ JetBrainsMono_400Regular, JetBrainsMono_500Medium });
+
+  useNotificationNavigation();
 
   if (!f1 || !f2) {
     return (

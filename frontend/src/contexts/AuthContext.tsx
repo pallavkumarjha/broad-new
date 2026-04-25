@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { Platform } from 'react-native';
+import Constants from 'expo-constants';
 import { api, storage, TOKEN_KEY, REFRESH_TOKEN_KEY, describeError } from '../lib/api';
 
 export type User = {
@@ -37,7 +38,8 @@ async function _registerPushToken(): Promise<void> {
       finalStatus = s;
     }
     if (finalStatus !== 'granted') return;
-    const tokenData = await Notifications.getExpoPushTokenAsync();
+    const projectId = Constants.expoConfig?.extra?.eas?.projectId as string | undefined;
+    const tokenData = await Notifications.getExpoPushTokenAsync({ projectId });
     await api.post('/users/me/push-token', { token: tokenData.data });
   } catch {
     // Silently swallow — push is opt-in, never block auth flow
@@ -54,6 +56,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const { data } = await api.get('/auth/me');
       setUser(data);
+      // Re-register push token on every app launch — handles permission grants,
+      // device changes, and token rotation. Backend upserts so it's safe to spam.
+      _registerPushToken();
     } catch {
       await storage.deleteItem(TOKEN_KEY);
       setUser(null);

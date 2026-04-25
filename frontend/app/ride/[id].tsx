@@ -184,14 +184,17 @@ export default function LiveRide() {
     return () => { try { sub.remove(); } catch {} };
   }, [settings.crashDetect]);
 
-  // WebSocket — real-time convoy position broadcast
+  // WebSocket — real-time convoy position broadcast.
+  // Gated on EXPO_PUBLIC_WS_URL because the prod REST proxy (Vercel) cannot
+  // tunnel WS upgrades. When unset, ride screen falls back to /trips/{id}/convoy
+  // (the GET below) for periodic convoy state.
   useEffect(() => {
     let alive = true;
     (async () => {
       const token = await storage.getItem(TOKEN_KEY);
       if (!token || !id) return;
-      const base = process.env.EXPO_PUBLIC_BACKEND_URL || '';
-      const wsBase = base.replace(/^http/, 'ws');
+      const wsBase = process.env.EXPO_PUBLIC_WS_URL?.replace(/^http/, 'ws');
+      if (!wsBase) return; // push-only / REST-only mode
       const url = `${wsBase}/api/ws/convoy/${id}?token=${encodeURIComponent(token)}`;
       try {
         const ws = new WebSocket(url);
