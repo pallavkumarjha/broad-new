@@ -47,10 +47,15 @@ module.exports = () => ({
         backgroundColor: '#EFECE5',
       },
       edgeToEdgeEnabled: true,
+      // Allow plain HTTP only in dev builds so Metro/LAN backend (http://192.168.x.x:8000)
+      // is reachable. Production stays HTTPS-only.
+      usesCleartextTraffic: IS_DEV,
       permissions: [
         'android.permission.USE_BIOMETRIC',
         'android.permission.USE_FINGERPRINT',
         'android.permission.RECORD_AUDIO',
+        'android.permission.ACCESS_FINE_LOCATION',
+        'android.permission.ACCESS_COARSE_LOCATION',
       ],
     },
     web: {
@@ -85,6 +90,13 @@ module.exports = () => ({
       ],
       'expo-document-picker',
       [
+        'expo-location',
+        {
+          locationAlwaysAndWhenInUsePermission:
+            'Allow Broad to access your location so your crew can see you on the map during a ride.',
+          locationWhenInUsePermission:
+            'Allow Broad to access your location so your crew can see you on the map during a ride.',
+        },
         'expo-notifications',
         {
           // Tinted notification icon for Android (monochrome, white on transparent).
