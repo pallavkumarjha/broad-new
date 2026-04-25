@@ -290,6 +290,16 @@ class SOSDetail(SOSEvent):
     emergency_contact: Optional[SOSContact] = None
 
 
+class Notification(BaseModel):
+    id: str
+    user_id: str
+    title: str
+    body: str
+    data: dict = Field(default_factory=dict)
+    read: bool = False
+    created_at: str
+
+
 # ---------- Auth dependency ----------
 async def get_current_user(request: Request) -> dict:
     token = None
@@ -563,10 +573,35 @@ def trip_request_from_doc(d: dict) -> TripRequest:
     return TripRequest(**d)
 
 
-async def _push_to_users(user_ids: List[str], title: str, body: str, data: dict | None = None) -> None:
-    """Look up Expo push tokens for the given user ids and send a notification."""
+async def _persist_notifications(user_ids: List[str], title: str, body: str, data: dict | None = None) -> None:
+    """Persist a notification record per recipient so the in-app inbox can render history."""
     if not user_ids:
         return
+    created_at = now_iso()
+    docs = [
+        {
+            "id": str(uuid.uuid4()),
+            "user_id": uid,
+            "title": title,
+            "body": body,
+            "data": data or {},
+            "read": False,
+            "created_at": created_at,
+        }
+        for uid in user_ids
+    ]
+    try:
+        await db.notifications.insert_many(docs)
+    except Exception as exc:
+        logger.warning("Notification persist failed: %s", exc)
+
+
+async def _push_to_users(user_ids: List[str], title: str, body: str, data: dict | None = None) -> None:
+    """Persist + push to the given user ids. Persistence runs even if no push token exists,
+    so the in-app inbox still shows the notification when the user opens the app."""
+    if not user_ids:
+        return
+    await _persist_notifications(user_ids, title, body, data)
     cursor = db.users.find(
         {"id": {"$in": user_ids}, "expo_push_token": {"$exists": True, "$ne": ""}},
         {"_id": 0, "expo_push_token": 1},
@@ -855,30 +890,25 @@ async def _send_expo_push(tokens: List[str], title: str, body: str, data: dict |
 
 
 async def _notify_sos_crew(sos_doc: dict, sender_name: str) -> None:
-    """Look up crew members of the active trip and send them an Expo push notification."""
+    """Look up crew + organiser of the active trip and notify them (in-app inbox + Expo push).
+    Excludes the sender. Persists every notification so an offline rider sees it on next open."""
     trip_id = sos_doc.get("trip_id")
     if not trip_id:
         return
-    trip = await db.trips.find_one({"id": trip_id}, {"_id": 0, "crew_ids": 1})
+    trip = await db.trips.find_one({"id": trip_id}, {"_id": 0, "crew_ids": 1, "user_id": 1})
     if not trip:
         return
-    crew_ids = trip.get("crew_ids") or []
-    if not crew_ids:
+    sender_id = sos_doc.get("user_id")
+    # Notify organiser AND crew — organiser may not be in crew_ids
+    recipients = list({trip.get("user_id"), *(trip.get("crew_ids") or [])} - {None, sender_id})
+    if not recipients:
         return
-    # collect push tokens for all crew members that have one
-    cursor = db.users.find(
-        {"id": {"$in": crew_ids}, "expo_push_token": {"$exists": True, "$ne": ""}},
-        {"_id": 0, "expo_push_token": 1},
+    await _push_to_users(
+        recipients,
+        title="🚨 SOS Alert",
+        body=f"{sender_name} triggered an SOS. Check the app now.",
+        data={"type": "sos", "sos_id": sos_doc["id"], "trip_id": trip_id},
     )
-    members = await cursor.to_list(50)
-    tokens = [m["expo_push_token"] for m in members if m.get("expo_push_token")]
-    if tokens:
-        await _send_expo_push(
-            tokens,
-            title="🚨 SOS Alert",
-            body=f"{sender_name} triggered an SOS. Check the app now.",
-            data={"type": "sos", "sos_id": sos_doc["id"], "trip_id": trip_id},
-        )
 
 
 # ---------- SOS ----------
@@ -960,6 +990,54 @@ async def resolve_sos(sos_id: str, user: dict = Depends(get_current_user)):
     )
     doc.update({"status": "resolved", "resolved_at": now_iso()})
     return SOSEvent(**doc)
+
+
+# ---------- Notifications inbox ----------
+@api.get("/notifications", response_model=List[Notification])
+async def list_notifications(user: dict = Depends(get_current_user), limit: int = 100):
+    """Return current user's notifications, newest first. Caps at 100 by default."""
+    limit = max(1, min(int(limit or 100), 200))
+    cursor = (
+        db.notifications.find({"user_id": user["id"]}, {"_id": 0})
+        .sort("created_at", -1)
+        .limit(limit)
+    )
+    docs = await cursor.to_list(limit)
+    return [Notification(**d) for d in docs]
+
+
+@api.get("/notifications/unread-count")
+async def notifications_unread_count(user: dict = Depends(get_current_user)):
+    n = await db.notifications.count_documents({"user_id": user["id"], "read": False})
+    return {"count": n}
+
+
+@api.post("/notifications/read-all")
+async def notifications_read_all(user: dict = Depends(get_current_user)):
+    res = await db.notifications.update_many(
+        {"user_id": user["id"], "read": False},
+        {"$set": {"read": True}},
+    )
+    return {"updated": res.modified_count}
+
+
+@api.post("/notifications/{nid}/read")
+async def notifications_read_one(nid: str, user: dict = Depends(get_current_user)):
+    res = await db.notifications.update_one(
+        {"id": nid, "user_id": user["id"]},
+        {"$set": {"read": True}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    return {"ok": True}
+
+
+@api.delete("/notifications/{nid}")
+async def notifications_delete(nid: str, user: dict = Depends(get_current_user)):
+    res = await db.notifications.delete_one({"id": nid, "user_id": user["id"]})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    return {"ok": True}
 
 
 @api.get("/users/search")
@@ -1271,6 +1349,10 @@ async def seed():
     # SOS is low-volume but /sos/active fires on every ride screen mount
     await db.sos_events.create_index("id", unique=True)
     await db.sos_events.create_index([("user_id", 1), ("status", 1)])
+    # Notifications inbox: per-user list newest-first + unread-count
+    await db.notifications.create_index("id", unique=True)
+    await db.notifications.create_index([("user_id", 1), ("created_at", -1)])
+    await db.notifications.create_index([("user_id", 1), ("read", 1)])
 
     admin_email = os.environ.get("ADMIN_EMAIL", "rider@broad.app")
     admin_password = os.environ.get("ADMIN_PASSWORD")
