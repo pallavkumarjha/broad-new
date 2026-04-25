@@ -7,10 +7,29 @@ import * as Location from 'expo-location';
 import { Accelerometer } from 'expo-sensors';
 import { api, storage, TOKEN_KEY } from '../../src/lib/api';
 import { useSettings } from '../../src/contexts/SettingsContext';
+import { useAuth } from '../../src/contexts/AuthContext';
 import { colors, type, space, fonts } from '../../src/theme/tokens';
 import { Eyebrow, Meta } from '../../src/components/ui';
-import { MapView } from '../../src/components/MapView';
+import { MapView, type LiveMarker } from '../../src/components/MapView';
 import { SOSButton } from '../../src/components/SOSButton';
+
+/** Bearing between two lat/lng points in degrees (0 = north, clockwise). Used to
+ * rotate the rider's marker so the crew can see which direction they're heading
+ * when the GPS itself doesn't report bearing (common at low speeds). */
+function bearingDeg(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const toDeg = (r: number) => (r * 180) / Math.PI;
+  const φ1 = toRad(a.lat);
+  const φ2 = toRad(b.lat);
+  const Δλ = toRad(b.lng - a.lng);
+  const y = Math.sin(Δλ) * Math.cos(φ2);
+  const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+  return (toDeg(Math.atan2(y, x)) + 360) % 360;
+}
+
+/** A position is "stale" if no update arrived in this many ms. We gray it on
+ * the map and in the roster to signal the rider may have lost signal. */
+const STALE_AFTER_MS = 30_000;
 
 // Live Ride — DARK MODE instrument panel.
 // All telemetry sourced from real GPS. No mock simulation.
@@ -18,8 +37,9 @@ export default function LiveRide() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const { settings } = useSettings();
+  const { user: currentUser } = useAuth();
   const [trip, setTrip] = useState<any>(null);
-  const [convoy, setConvoy] = useState<any>({ members: [] });
+  const [convoy, setConvoy] = useState<{ members: any[] }>({ members: [] });
   const [progress, setProgress] = useState(0); // 0..1 along route — derived from GPS distance vs trip total
   const [speed, setSpeed] = useState(0);
   const [displaySpeed, setDisplaySpeed] = useState(0);
@@ -27,6 +47,12 @@ export default function LiveRide() {
   const [elapsed, setElapsed] = useState(0); // seconds
   const [gpsActive, setGpsActive] = useState(false);
   const [realPos, setRealPos] = useState<{ lat: number; lng: number } | null>(null);
+  const [heading, setHeading] = useState(0);
+  const [accuracyM, setAccuracyM] = useState<number | null>(null);
+  // Re-render once a second so stale-marker computation (based on
+  // updated_at vs Date.now()) actually picks up missing ticks even when
+  // no fresh WS message has arrived to trigger a render.
+  const [, setTick] = useState(0);
   const startedAt = useRef(Date.now());
   const wsRef = useRef<WebSocket | null>(null);
   const locSub = useRef<any>(null);
@@ -39,9 +65,22 @@ export default function LiveRide() {
   // even when called from long-lived effects (crash detection, auto-SOS timer).
   const liveMarkerRef = useRef<{ lat: number; lng: number }>({ lat: 0, lng: 0 });
   const speedRef = useRef(0);
+  const headingRef = useRef(0);
+  // Last GPS sample we used to derive a bearing — Expo's `coords.heading` is
+  // unreliable at low speed and on Android emulators, so we compute our own.
+  const lastSampleRef = useRef<{ lat: number; lng: number; ts: number } | null>(null);
 
-  // Keep speedRef in sync so triggerSos always has the latest reading.
+  // Keep speedRef + headingRef in sync so triggerSos / WS broadcast always have
+  // the latest reading without re-binding callbacks.
   useEffect(() => { speedRef.current = speed; }, [speed]);
+  useEffect(() => { headingRef.current = heading; }, [heading]);
+
+  // Drive the stale-marker timer. Cheap (one setState per second) and only
+  // needed while the ride screen is mounted.
+  useEffect(() => {
+    const t = setInterval(() => setTick(n => n + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
 
   // triggerSos is defined here (before the early return) so the crash-detection
   // effect always captures a valid, stable reference. It reads liveMarkerRef and
@@ -105,7 +144,51 @@ export default function LiveRide() {
     return () => clearInterval(t);
   }, []);
 
-  // Real GPS (native) or browser geolocation (web) — graceful fallback
+  // Common handler: ingest one GPS sample, push it through to state + refs.
+  // Centralised so web (navigator.geolocation) and native (expo-location)
+  // share identical filtering, heading derivation, and stat tracking.
+  const ingestSample = useCallback((sample: {
+    lat: number; lng: number; speed?: number | null; heading?: number | null; accuracy?: number | null;
+  }) => {
+    const next = { lat: sample.lat, lng: sample.lng };
+    setGpsActive(true);
+    setRealPos(next);
+
+    // Speed: device reports m/s, we display km/h. Negative = "unknown".
+    const rawSpeed = sample.speed ?? -1;
+    if (rawSpeed >= 0) {
+      const sp = Math.round(rawSpeed * 3.6);
+      setSpeed(Math.max(0, sp));
+      setTopSpeed(ts => Math.max(ts, sp));
+    }
+
+    // Accuracy: only used to gate whether we trust the fix. Don't broadcast
+    // anything worse than 50m — the server will reject >100m anyway and
+    // we'd rather not burn bandwidth on samples that get tossed.
+    if (typeof sample.accuracy === 'number' && sample.accuracy >= 0) {
+      setAccuracyM(sample.accuracy);
+    }
+
+    // Heading: prefer device heading when available + the rider is moving
+    // fast enough for it to be meaningful; otherwise derive from delta vs
+    // the last sample (Haversine bearing). Stationary riders keep their
+    // last known heading instead of jittering to 0.
+    const devHeading = typeof sample.heading === 'number' && sample.heading >= 0 ? sample.heading : null;
+    const moving = rawSpeed >= 1.5; // ~5 km/h — slower than this and bearing is noise
+    const last = lastSampleRef.current;
+    let h = headingRef.current;
+    if (devHeading != null && moving) {
+      h = devHeading;
+    } else if (last && moving) {
+      const dist = Math.hypot(next.lat - last.lat, next.lng - last.lng);
+      // Skip jitter: positions within ~1m of each other tell us nothing.
+      if (dist > 0.00001) h = bearingDeg(last, next);
+    }
+    setHeading(h);
+    lastSampleRef.current = { ...next, ts: Date.now() };
+  }, []);
+
+  // Real GPS (native) or browser geolocation (web) — graceful fallback.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -115,15 +198,13 @@ export default function LiveRide() {
             const watchId = navigator.geolocation.watchPosition(
               (pos) => {
                 if (cancelled) return;
-                setGpsActive(true);
-                setRealPos({ lat: pos.coords.latitude, lng: pos.coords.longitude });
-                // coords.speed is null on many browsers — only use it when valid.
-                const raw = pos.coords.speed ?? -1;
-                if (raw >= 0) {
-                  const sp = Math.round(raw * 3.6);
-                  setSpeed(Math.max(0, sp));
-                  setTopSpeed(ts => Math.max(ts, sp));
-                }
+                ingestSample({
+                  lat: pos.coords.latitude,
+                  lng: pos.coords.longitude,
+                  speed: pos.coords.speed,
+                  heading: pos.coords.heading,
+                  accuracy: pos.coords.accuracy,
+                });
               },
               () => {},
               { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 }
@@ -137,16 +218,13 @@ export default function LiveRide() {
               { accuracy: Location.Accuracy.High, timeInterval: 2000, distanceInterval: 5 },
               (pos) => {
                 if (cancelled) return;
-                setGpsActive(true);
-                setRealPos({ lat: pos.coords.latitude, lng: pos.coords.longitude });
-                // iOS reports -1 / Android reports null when speed not yet
-                // resolved. Only consume valid readings.
-                const raw = pos.coords.speed ?? -1;
-                if (raw >= 0) {
-                  const sp = Math.round(raw * 3.6);
-                  setSpeed(Math.max(0, sp));
-                  setTopSpeed(ts => Math.max(ts, sp));
-                }
+                ingestSample({
+                  lat: pos.coords.latitude,
+                  lng: pos.coords.longitude,
+                  speed: pos.coords.speed,
+                  heading: pos.coords.heading,
+                  accuracy: pos.coords.accuracy,
+                });
               }
             );
           }
@@ -154,7 +232,7 @@ export default function LiveRide() {
       } catch {}
     })();
     return () => { cancelled = true; try { locSub.current?.remove?.(); } catch {} };
-  }, []);
+  }, [ingestSample]);
 
   // Crash detection (accelerometer magnitude > 3.5g peak)
   useEffect(() => {
@@ -202,15 +280,21 @@ export default function LiveRide() {
         ws.onmessage = (e) => {
           try {
             const d = JSON.parse(e.data);
-            if (d.type === 'state' && alive) {
-              setConvoy({ members: d.members });
+            if (!alive) return;
+            if (d.type === 'state') {
+              setConvoy({ members: d.members || [] });
+            } else if (d.type === 'trip_ended') {
+              // Server says the organiser ended the trip. Bail out of the
+              // ride screen — no point staying on a screen that's broadcasting
+              // to a closed room.
+              router.replace(`/complete/${id}`);
             }
           } catch {}
         };
       } catch {}
     })();
     return () => { alive = false; try { wsRef.current?.close(); } catch {} };
-  }, [id]);
+  }, [id, router]);
 
   // Broadcast own GPS position to convoy. Skip if no real fix yet — never send
   // interpolated/mock coords (would mislead the rest of the crew on the map).
@@ -225,11 +309,13 @@ export default function LiveRide() {
           lat: realPos.lat,
           lng: realPos.lng,
           speed_kmh: speed,
+          heading_deg: heading,
+          accuracy_m: accuracyM,
         }));
       } catch {}
     }, 3000);
     return () => clearInterval(t);
-  }, [speed, realPos]);
+  }, [speed, heading, accuracyM, realPos]);
 
   const { width: screenWidth } = useWindowDimensions();
 
@@ -238,11 +324,43 @@ export default function LiveRide() {
   }
 
   const allPoints = [trip.start, ...(trip.waypoints || []), trip.end].filter(Boolean);
-  // Live marker shows ONLY real GPS — no interpolated/mock position.
-  // Falls back to trip start so the map still has a valid centroid before first fix.
+
+  // Compute the marker list for the map. Self comes from local GPS state
+  // (zero round-trip latency), crew comes from the WS state payload.
+  // Falls back to trip start when neither has a fix so the map still shows
+  // a sensible centroid instead of [0,0] in the Atlantic.
+  const myId = currentUser?.id;
+  const now = Date.now();
+  const markers: LiveMarker[] = [];
+  if (realPos) {
+    markers.push({
+      id: myId || '__self__',
+      lat: realPos.lat,
+      lng: realPos.lng,
+      heading_deg: heading,
+      name: currentUser?.name || 'You',
+      isSelf: true,
+    });
+  }
+  for (const m of convoy.members) {
+    // Skip self in the WS payload — we render local self above so the map
+    // shows zero-latency motion instead of the 3s WS tick.
+    if (m.user_id === myId) continue;
+    if (m.lat == null || m.lng == null) continue;
+    const updatedTs = m.updated_at ? Date.parse(m.updated_at) : 0;
+    const stale = updatedTs > 0 && now - updatedTs > STALE_AFTER_MS;
+    markers.push({
+      id: m.user_id,
+      lat: m.lat,
+      lng: m.lng,
+      heading_deg: m.heading_deg ?? 0,
+      name: m.name,
+      stale,
+    });
+  }
+
+  // Liver marker for SOS/payload purposes — always our own position.
   const liveMarker = realPos || allPoints[0] || { lat: 0, lng: 0 };
-  // Keep ref in sync so triggerSos always has the latest position without
-  // needing to be in the effect deps array.
   liveMarkerRef.current = liveMarker;
 
   const fmtTime = (s: number) => {
@@ -292,9 +410,9 @@ export default function LiveRide() {
           </View>
 
         <ScrollView contentContainerStyle={{ paddingBottom: space.xl }}>
-          {/* Map */}
+          {/* Map — self + crew live markers, diffed by id inside the WebView. */}
           <View style={{ alignItems: 'center', paddingTop: space.sm }}>
-            <MapView points={allPoints} dark width={screenWidth} height={300} liveMarker={liveMarker} />
+            <MapView points={allPoints} dark width={screenWidth} height={300} markers={markers} />
           </View>
 
           {/* Speedometer */}
@@ -308,21 +426,35 @@ export default function LiveRide() {
             </View>
           </View>
 
-          {/* Convoy roster — live from WebSocket */}
+          {/* Convoy roster — live from WebSocket. Self is excluded since it's
+              already represented by the speedometer above; this list is "the
+              other riders". Stale = no fresh fix in 30s, marker greys out. */}
           <View style={styles.darkBlock}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Eyebrow color={colors.dark.inkMuted}>CONVOY — {convoy.members.length}</Eyebrow>
+              <Eyebrow color={colors.dark.inkMuted}>CONVOY — {convoy.members.filter((m: any) => m.user_id !== myId).length}</Eyebrow>
             </View>
-            {convoy.members.map((m: any) => (
-              <View key={m.user_id} style={styles.convoyRow}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                  <View style={[styles.statusDot, { backgroundColor: m.online ? colors.dark.safe : colors.dark.inkMuted }]} />
-                  <Text style={[type.body, { color: colors.dark.ink }]}>{m.name}</Text>
-                  <Meta style={{ color: colors.dark.inkMuted }}>· {m.lat != null && m.lng != null ? 'LIVE' : 'NO FIX'}</Meta>
+            {convoy.members.filter((m: any) => m.user_id !== myId).map((m: any) => {
+              const updatedTs = m.updated_at ? Date.parse(m.updated_at) : 0;
+              const stale = updatedTs > 0 && now - updatedTs > STALE_AFTER_MS;
+              const hasFix = m.lat != null && m.lng != null;
+              const status = !hasFix ? 'NO FIX' : stale ? 'STALE' : 'LIVE';
+              const dotColor = !hasFix || stale ? colors.dark.inkMuted : colors.dark.safe;
+              return (
+                <View key={m.user_id} style={styles.convoyRow}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <View style={[styles.statusDot, { backgroundColor: dotColor }]} />
+                    <Text style={[type.body, { color: colors.dark.ink }]}>{m.name}</Text>
+                    <Meta style={{ color: colors.dark.inkMuted }}>· {status}</Meta>
+                  </View>
+                  <Meta style={{ color: colors.dark.ink }}>{Math.round(m.speed_kmh || 0)} KM/H</Meta>
                 </View>
-                <Meta style={{ color: colors.dark.ink }}>{m.speed_kmh} KM/H</Meta>
-              </View>
-            ))}
+              );
+            })}
+            {convoy.members.filter((m: any) => m.user_id !== myId).length === 0 && (
+              <Text style={[type.meta, { color: colors.dark.inkMuted, paddingVertical: space.sm }]}>
+                No other riders connected yet.
+              </Text>
+            )}
           </View>
         </ScrollView>
 
