@@ -47,7 +47,7 @@ TaskManager.defineTask(BACKGROUND_LOC_TASK, async ({ data, error }) => {
   // React tree is suspended. Token refresh on background failures is left
   // for the foreground tick to handle.
   try {
-    await fetch(`${base}/api/trips/${tripId}/pos`, {
+    const res = await fetch(`${base}/api/trips/${tripId}/pos`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -61,8 +61,35 @@ TaskManager.defineTask(BACKGROUND_LOC_TASK, async ({ data, error }) => {
         accuracy_m,
       }),
     });
+
+    // 401 = token expired. We can't refresh from inside a background task
+    // reliably (no React tree, no axios interceptors), so the safest thing
+    // is to stop firing. Foreground tick on next app open will refresh and
+    // the rider can re-enable BG. Continuing to fire just burns battery
+    // and bandwidth on guaranteed-401s.
+    if (res.status === 401) {
+      await Location.stopLocationUpdatesAsync(BACKGROUND_LOC_TASK).catch(() => {});
+      await storage.deleteItem(ACTIVE_TRIP_KEY).catch(() => {});
+      return;
+    }
+
+    // Server says the trip isn't active anymore (rider was removed, organiser
+    // ended it). Stop ourselves — otherwise we'd keep posting until the app
+    // explicitly toggles BG off, draining battery on a dead trip.
+    if (res.ok) {
+      try {
+        const body = await res.json();
+        if (body && body.ok === false && body.reason === 'trip_not_active') {
+          await Location.stopLocationUpdatesAsync(BACKGROUND_LOC_TASK).catch(() => {});
+          await storage.deleteItem(ACTIVE_TRIP_KEY).catch(() => {});
+        }
+      } catch {
+        // Body parse failure is fine; we'll retry next tick.
+      }
+    }
   } catch {
-    // Swallow — phone may be in a tunnel. Next sample will retry naturally.
+    // Network failure — phone may be in a tunnel. Next sample will retry
+    // naturally. Don't stop the task on transient errors.
   }
 });
 

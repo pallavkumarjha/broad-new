@@ -1,6 +1,25 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { storage, TOKEN_KEY } from './api';
 
+/** Resolve the WebSocket base URL.
+ *
+ * Prefers `EXPO_PUBLIC_WS_URL` when set — that exists for the production
+ * config where the public REST URL points at a proxy (Vercel) that can't
+ * tunnel WS upgrades and the upstream Railway host has to be hit directly.
+ * Falls back to `EXPO_PUBLIC_BACKEND_URL` when unset, which is the common
+ * local-dev case where the same FastAPI process serves REST and WS.
+ *
+ * Without this fallback, every dev build that only configures
+ * `EXPO_PUBLIC_BACKEND_URL` got a silent failure: live location dead, SOS
+ * in-app alerts dead, ride screen looking like nobody else exists. */
+function resolveWsBase(): string | null {
+  const explicit = process.env.EXPO_PUBLIC_WS_URL;
+  const backend = process.env.EXPO_PUBLIC_BACKEND_URL;
+  const base = explicit || backend;
+  if (!base) return null;
+  return base.replace(/^http/, 'ws');
+}
+
 /** Member as broadcast by the server's `state` payload. Mirrors the shape in
  * backend/server.py ConvoyHub.broadcast_state — keep these in sync. */
 export type ConvoyMember = {
@@ -56,14 +75,34 @@ function backoffMs(attempt: number): number {
  * with no retry. Riders going through a tunnel or switching cell towers
  * would silently lose the convoy and not realise until they noticed nobody
  * was moving on the map. That's a nasty failure mode for a safety feature. */
-export function useConvoySocket(tripId: string | undefined, opts?: { onTripEnded?: () => void }) {
+export type SosPayload = {
+  sender: string;
+  sender_user_id: string;
+  sos_id: string;
+};
+
+export function useConvoySocket(
+  tripId: string | undefined,
+  opts?: {
+    onTripEnded?: () => void;
+    /** Fires when the server fans out an SOS into this trip room.
+     * Caller is responsible for de-duplicating (the same SOS may also arrive
+     * via GlobalSosListener's separate WS) and showing UI. Without this
+     * callback the hook silently drops `sos` messages, which is exactly how
+     * the ride screen ended up appearing to never see SOS alerts even
+     * though the server was broadcasting them correctly. */
+    onSos?: (sos: SosPayload) => void;
+  },
+) {
   const [members, setMembers] = useState<ConvoyMember[]>([]);
   const [state, setState] = useState<SocketState>({ kind: 'idle' });
   const wsRef = useRef<WebSocket | null>(null);
   const onTripEndedRef = useRef(opts?.onTripEnded);
-  // Stash the handler in a ref so changing the closure on the consumer
+  const onSosRef = useRef(opts?.onSos);
+  // Stash the handlers in refs so changing the closures on the consumer
   // side doesn't tear down and rebuild the socket every render.
   useEffect(() => { onTripEndedRef.current = opts?.onTripEnded; }, [opts?.onTripEnded]);
+  useEffect(() => { onSosRef.current = opts?.onSos; }, [opts?.onSos]);
 
   useEffect(() => {
     if (!tripId) return;
@@ -74,7 +113,7 @@ export function useConvoySocket(tripId: string | undefined, opts?: { onTripEnded
     async function connect() {
       if (cancelled) return;
       const token = await storage.getItem(TOKEN_KEY);
-      const wsBase = process.env.EXPO_PUBLIC_WS_URL?.replace(/^http/, 'ws');
+      const wsBase = resolveWsBase();
       if (!token || !wsBase) {
         // No transport configured — caller is in REST-only mode. Surface a
         // terminal state so callers can fall back gracefully.
@@ -107,6 +146,12 @@ export function useConvoySocket(tripId: string | undefined, opts?: { onTripEnded
             setMembers(d.members || []);
           } else if (d.type === 'trip_ended') {
             onTripEndedRef.current?.();
+          } else if (d.type === 'sos' && d.sos_id) {
+            onSosRef.current?.({
+              sender: d.sender || 'A rider',
+              sender_user_id: d.sender_user_id || '',
+              sos_id: d.sos_id,
+            });
           }
         } catch {}
       };

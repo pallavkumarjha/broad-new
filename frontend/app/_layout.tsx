@@ -41,7 +41,12 @@ function useNotificationNavigation() {
   const navigate = React.useCallback((data: Record<string, any> | undefined) => {
     if (!data) return;
     const { type, trip_id, sos_id } = data as any;
-    if (type === 'sos' && sos_id)                                      router.push(`/sos/${sos_id}` as any);
+    // SOS push notifications are received by *other* riders — the sender's
+    // own client navigates to /sos/{id} immediately after triggering. So the
+    // tap-target for a push is the responder view, not the sender's resolve
+    // screen (which would let a responder accidentally hit the "I'm safe"
+    // button on someone else's emergency).
+    if (type === 'sos' && sos_id)                                      router.push(`/sos/respond/${sos_id}` as any);
     else if (trip_id && (
       type === 'trip_request' ||
       type === 'trip_request_approved' ||
@@ -112,6 +117,7 @@ export default function RootLayout() {
             <Stack.Screen name="plan" options={{ animation: 'slide_from_bottom' }} />
             {/* SOS — full red takeover, no slide, just cut */}
             <Stack.Screen name="sos/[id]" options={{ animation: 'fade' }} />
+            <Stack.Screen name="sos/respond/[id]" options={{ animation: 'fade' }} />
             <Stack.Screen name="sos/safe/[id]" options={{ animation: 'fade' }} />
             {/* Auth — crossfade, not directional */}
             <Stack.Screen name="(auth)" options={{ animation: 'fade' }} />
