@@ -521,6 +521,50 @@ async def get_trip(trip_id: str, user: dict = Depends(get_current_user)):
     return trip_from_doc(doc)
 
 
+# ---------- Background position update (REST fallback) ----------
+# Background tasks on Android/iOS can't reliably hold a WebSocket open while
+# the app is suspended. The background-location task ships pos updates here
+# instead — REST fits the constrained execution window better, and the hub
+# fanout reaches every other rider exactly the same way it does for live
+# WS broadcasts.
+class BackgroundPosIn(BaseModel):
+    lat: float
+    lng: float
+    speed_kmh: float = 0
+    heading_deg: float = 0
+    accuracy_m: float | None = None
+
+
+@api.post("/trips/{trip_id}/pos")
+async def post_trip_pos(trip_id: str, body: BackgroundPosIn, user: dict = Depends(get_current_user)):
+    """Submit one position sample. Used by the background-location task on the
+    rider's phone; the server pipes it straight into ConvoyHub so other crew
+    members see the update via their WebSocket."""
+    trip = await db.trips.find_one({"id": trip_id}, {"_id": 0, "user_id": 1, "crew_ids": 1, "status": 1})
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    is_member = (trip.get("user_id") == user["id"]) or (user["id"] in (trip.get("crew_ids") or []))
+    if not is_member:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if trip.get("status") != "active":
+        # Background task may keep firing briefly after the trip ends — silently
+        # accept-but-discard so the client doesn't keep retrying.
+        return {"ok": False, "reason": "trip_not_active"}
+
+    # Make sure the room has a slot for this rider before we update — they may
+    # never have opened a WS this trip (background-only mode), but still want
+    # their position fanned out to crew.
+    room = hub.rooms.setdefault(trip_id, {})
+    if user["id"] not in room:
+        room[user["id"]] = {
+            "name": user.get("name", "Rider"),
+            "lat": None, "lng": None, "speed_kmh": 0, "heading_deg": 0, "accuracy_m": None,
+            "updated_at": now_iso(), "sockets": {},
+        }
+    applied = await hub.update(trip_id, user["id"], body.dict())
+    return {"ok": applied}
+
+
 # ---------- Route geometry (road-following polyline) ----------
 # Riders expect the live ride map to draw the actual road they'll be on, not
 # straight lines between waypoints. We resolve those once per trip via OSRM

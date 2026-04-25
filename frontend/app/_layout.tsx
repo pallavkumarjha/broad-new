@@ -12,6 +12,12 @@ import { colors } from '../src/theme/tokens';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClient } from '../src/lib/queryClient';
 import { GlobalSosListener } from '../src/components/GlobalSosListener';
+// Importing for side effect: registers the background-location task with the
+// OS at app startup. Has to happen before any code calls
+// `Location.startLocationUpdatesAsync(BACKGROUND_LOC_TASK, ...)` and also
+// has to happen on cold restart so the OS can deliver queued samples that
+// arrived while the app was killed.
+import '../src/lib/backgroundLocation';
 
 // ── Notification display handler ──────────────────────────────────────────────
 // Controls how notifications appear when the app is in the foreground.

@@ -7,6 +7,11 @@ import * as Location from 'expo-location';
 import { Accelerometer } from 'expo-sensors';
 import { api } from '../../src/lib/api';
 import { useConvoySocket } from '../../src/lib/useConvoySocket';
+import {
+  startBackgroundTracking,
+  stopBackgroundTracking,
+  isBackgroundTrackingActive,
+} from '../../src/lib/backgroundLocation';
 import { useSettings } from '../../src/contexts/SettingsContext';
 import { useAuth } from '../../src/contexts/AuthContext';
 import { colors, type, space, fonts } from '../../src/theme/tokens';
@@ -279,6 +284,44 @@ export default function LiveRide() {
     return () => { try { sub.remove(); } catch {} };
   }, [settings.crashDetect]);
 
+  // Background-location toggle. Default off — riders opt in per ride because
+  // it's a battery cost they should consciously accept (and because Android's
+  // "Allow all the time" prompt is jarring without context).
+  const [bgActive, setBgActive] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    isBackgroundTrackingActive().then(active => {
+      if (!cancelled) setBgActive(active);
+    });
+    return () => { cancelled = true; };
+  }, []);
+  const toggleBackground = useCallback(async () => {
+    if (bgActive) {
+      await stopBackgroundTracking();
+      setBgActive(false);
+      return;
+    }
+    if (!id) return;
+    const res = await startBackgroundTracking(id);
+    if (res.ok) {
+      setBgActive(true);
+    } else if (res.reason === 'foreground_denied' || res.reason === 'background_denied') {
+      Alert.alert(
+        'Background location needed',
+        'Open Settings → Apps → Broad → Permissions → Location, and pick "Allow all the time" so your crew can still see you when the screen is off.',
+      );
+    } else if (res.reason === 'unsupported') {
+      Alert.alert('Not available on web', 'Background tracking requires the mobile app.');
+    }
+  }, [bgActive, id]);
+
+  // Stop background tracking when leaving the ride screen — otherwise the
+  // foreground service notification stays pinned forever and the rider keeps
+  // broadcasting position to a trip they're no longer watching.
+  useEffect(() => {
+    return () => { stopBackgroundTracking().catch(() => {}); };
+  }, []);
+
   // Convoy WebSocket — auto-reconnects on drops with exponential backoff.
   // `members` mirrors the latest server `state` payload; `sendPos` is a no-op
   // when the socket is closed, so the next reconnect picks up the fresh sample.
@@ -427,7 +470,17 @@ export default function LiveRide() {
           <View style={styles.darkBlock}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
               <Eyebrow color={colors.dark.inkMuted}>CONVOY — {convoyMembers.filter((m: any) => m.user_id !== myId).length}</Eyebrow>
+              <TouchableOpacity onPress={toggleBackground} testID="ride-bg-toggle">
+                <Meta style={{ color: bgActive ? colors.dark.amber : colors.dark.inkMuted }}>
+                  {bgActive ? '● BG ON' : '○ BG OFF'}
+                </Meta>
+              </TouchableOpacity>
             </View>
+            <Meta style={{ color: colors.dark.inkMuted, paddingTop: 4 }}>
+              {bgActive
+                ? 'Crew sees you even with screen off.'
+                : 'Tap BG to keep sharing when screen locks.'}
+            </Meta>
             {convoyMembers.filter((m: any) => m.user_id !== myId).map((m: any) => {
               const updatedTs = m.updated_at ? Date.parse(m.updated_at) : 0;
               const stale = updatedTs > 0 && now - updatedTs > STALE_AFTER_MS;

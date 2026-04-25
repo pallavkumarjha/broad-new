@@ -56,6 +56,12 @@ module.exports = () => ({
         'android.permission.RECORD_AUDIO',
         'android.permission.ACCESS_FINE_LOCATION',
         'android.permission.ACCESS_COARSE_LOCATION',
+        // Background location — opt-in per ride. Required so the foreground
+        // service can keep updating the crew when the rider locks the screen
+        // or switches apps to navigation.
+        'android.permission.ACCESS_BACKGROUND_LOCATION',
+        'android.permission.FOREGROUND_SERVICE',
+        'android.permission.FOREGROUND_SERVICE_LOCATION',
       ],
     },
     web: {
@@ -96,8 +102,16 @@ module.exports = () => ({
             'Allow Broad to access your location so your crew can see you on the map during a ride.',
           locationWhenInUsePermission:
             'Allow Broad to access your location so your crew can see you on the map during a ride.',
+          // iOS — required for the background location task to keep running
+          // while the screen is off. Without this the OS suspends us.
+          isIosBackgroundLocationEnabled: true,
+          isAndroidBackgroundLocationEnabled: true,
+          // Foreground service notification text on Android. Riders see this
+          // pinned to their notification shade for the duration of a ride.
+          isAndroidForegroundServiceEnabled: true,
         },
-      ], // Close the location array
+      ],
+      'expo-task-manager',
       [
         'expo-notifications', // Start a new array for notifications
         {
