@@ -5,7 +5,8 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { Accelerometer } from 'expo-sensors';
-import { api, storage, TOKEN_KEY } from '../../src/lib/api';
+import { api } from '../../src/lib/api';
+import { useConvoySocket } from '../../src/lib/useConvoySocket';
 import { useSettings } from '../../src/contexts/SettingsContext';
 import { useAuth } from '../../src/contexts/AuthContext';
 import { colors, type, space, fonts } from '../../src/theme/tokens';
@@ -39,7 +40,6 @@ export default function LiveRide() {
   const { settings } = useSettings();
   const { user: currentUser } = useAuth();
   const [trip, setTrip] = useState<any>(null);
-  const [convoy, setConvoy] = useState<{ members: any[] }>({ members: [] });
   const [progress, setProgress] = useState(0); // 0..1 along route — derived from GPS distance vs trip total
   const [speed, setSpeed] = useState(0);
   const [displaySpeed, setDisplaySpeed] = useState(0);
@@ -54,7 +54,6 @@ export default function LiveRide() {
   // no fresh WS message has arrived to trigger a render.
   const [, setTick] = useState(0);
   const startedAt = useRef(Date.now());
-  const wsRef = useRef<WebSocket | null>(null);
   const locSub = useRef<any>(null);
   const accelSub = useRef<any>(null);
   const lastAccel = useRef({ x: 0, y: 0, z: 0 });
@@ -262,60 +261,32 @@ export default function LiveRide() {
     return () => { try { sub.remove(); } catch {} };
   }, [settings.crashDetect]);
 
-  // WebSocket — real-time convoy position broadcast.
-  // Gated on EXPO_PUBLIC_WS_URL because the prod REST proxy (Vercel) cannot
-  // tunnel WS upgrades. When unset, ride screen falls back to /trips/{id}/convoy
-  // (the GET below) for periodic convoy state.
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      const token = await storage.getItem(TOKEN_KEY);
-      if (!token || !id) return;
-      const wsBase = process.env.EXPO_PUBLIC_WS_URL?.replace(/^http/, 'ws');
-      if (!wsBase) return; // push-only / REST-only mode
-      const url = `${wsBase}/api/ws/convoy/${id}?token=${encodeURIComponent(token)}`;
-      try {
-        const ws = new WebSocket(url);
-        wsRef.current = ws;
-        ws.onmessage = (e) => {
-          try {
-            const d = JSON.parse(e.data);
-            if (!alive) return;
-            if (d.type === 'state') {
-              setConvoy({ members: d.members || [] });
-            } else if (d.type === 'trip_ended') {
-              // Server says the organiser ended the trip. Bail out of the
-              // ride screen — no point staying on a screen that's broadcasting
-              // to a closed room.
-              router.replace(`/complete/${id}`);
-            }
-          } catch {}
-        };
-      } catch {}
-    })();
-    return () => { alive = false; try { wsRef.current?.close(); } catch {} };
+  // Convoy WebSocket — auto-reconnects on drops with exponential backoff.
+  // `members` mirrors the latest server `state` payload; `sendPos` is a no-op
+  // when the socket is closed, so the next reconnect picks up the fresh sample.
+  const onTripEnded = useCallback(() => {
+    router.replace(`/complete/${id}`);
   }, [id, router]);
+  const { members: convoyMembers, state: convoyState, sendPos } = useConvoySocket(
+    id,
+    { onTripEnded },
+  );
 
-  // Broadcast own GPS position to convoy. Skip if no real fix yet — never send
+  // Broadcast own GPS position. Skip if no real fix yet — never send
   // interpolated/mock coords (would mislead the rest of the crew on the map).
   useEffect(() => {
     const t = setInterval(() => {
-      const ws = wsRef.current;
-      if (!ws || ws.readyState !== 1) return;
       if (!realPos) return;
-      try {
-        ws.send(JSON.stringify({
-          type: 'pos',
-          lat: realPos.lat,
-          lng: realPos.lng,
-          speed_kmh: speed,
-          heading_deg: heading,
-          accuracy_m: accuracyM,
-        }));
-      } catch {}
+      sendPos({
+        lat: realPos.lat,
+        lng: realPos.lng,
+        speed_kmh: speed,
+        heading_deg: heading,
+        accuracy_m: accuracyM,
+      });
     }, 3000);
     return () => clearInterval(t);
-  }, [speed, heading, accuracyM, realPos]);
+  }, [speed, heading, accuracyM, realPos, sendPos]);
 
   const { width: screenWidth } = useWindowDimensions();
 
@@ -342,7 +313,7 @@ export default function LiveRide() {
       isSelf: true,
     });
   }
-  for (const m of convoy.members) {
+  for (const m of convoyMembers) {
     // Skip self in the WS payload — we render local self above so the map
     // shows zero-latency motion instead of the 3s WS tick.
     if (m.user_id === myId) continue;
@@ -390,7 +361,11 @@ export default function LiveRide() {
       <SafeAreaView style={{ flex: 1 }} edges={['top', 'bottom']}>
           <View style={styles.header}>
             <TouchableOpacity onPress={() => router.back()} testID="ride-close-btn"><Feather name="x" size={22} color={colors.dark.ink} /></TouchableOpacity>
-            <Eyebrow color={colors.dark.amber}>● LIVE — {trip.name.toUpperCase()} {gpsActive ? '· GPS' : '· WAITING FOR FIX'}</Eyebrow>
+            <Eyebrow color={colors.dark.amber}>
+              ● LIVE — {trip.name.toUpperCase()} {gpsActive ? '· GPS' : '· WAITING FOR FIX'}
+              {convoyState.kind === 'reconnecting' ? ` · RECONNECTING…` : ''}
+              {convoyState.kind === 'failed' ? ` · OFFLINE` : ''}
+            </Eyebrow>
             <TouchableOpacity onPress={endTrip} testID="ride-end-btn"><Meta style={{ color: colors.dark.amber }}>END</Meta></TouchableOpacity>
           </View>
           {/* M2 — Ride progress hairline */}
@@ -431,9 +406,9 @@ export default function LiveRide() {
               other riders". Stale = no fresh fix in 30s, marker greys out. */}
           <View style={styles.darkBlock}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Eyebrow color={colors.dark.inkMuted}>CONVOY — {convoy.members.filter((m: any) => m.user_id !== myId).length}</Eyebrow>
+              <Eyebrow color={colors.dark.inkMuted}>CONVOY — {convoyMembers.filter((m: any) => m.user_id !== myId).length}</Eyebrow>
             </View>
-            {convoy.members.filter((m: any) => m.user_id !== myId).map((m: any) => {
+            {convoyMembers.filter((m: any) => m.user_id !== myId).map((m: any) => {
               const updatedTs = m.updated_at ? Date.parse(m.updated_at) : 0;
               const stale = updatedTs > 0 && now - updatedTs > STALE_AFTER_MS;
               const hasFix = m.lat != null && m.lng != null;
@@ -450,7 +425,7 @@ export default function LiveRide() {
                 </View>
               );
             })}
-            {convoy.members.filter((m: any) => m.user_id !== myId).length === 0 && (
+            {convoyMembers.filter((m: any) => m.user_id !== myId).length === 0 && (
               <Text style={[type.meta, { color: colors.dark.inkMuted, paddingVertical: space.sm }]}>
                 No other riders connected yet.
               </Text>
