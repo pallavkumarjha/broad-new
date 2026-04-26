@@ -33,6 +33,21 @@ function bearingDeg(a: { lat: number; lng: number }, b: { lat: number; lng: numb
   return (toDeg(Math.atan2(y, x)) + 360) % 360;
 }
 
+/** Great-circle distance between two lat/lng points in metres. Used to
+ * accumulate trip distance from successive GPS samples. Haversine — accurate
+ * to ~0.5% which is well under the GPS error itself, no point reaching for
+ * Vincenty here. */
+function haversineMeters(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
+  const R = 6_371_000; // earth radius in metres
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const φ1 = toRad(a.lat);
+  const φ2 = toRad(b.lat);
+  const Δφ = toRad(b.lat - a.lat);
+  const Δλ = toRad(b.lng - a.lng);
+  const h = Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
 /** A position is "stale" if no update arrived in this many ms. We gray it on
  * the map and in the roster to signal the rider may have lost signal. */
 const STALE_AFTER_MS = 30_000;
@@ -45,7 +60,8 @@ export default function LiveRide() {
   const { settings } = useSettings();
   const { user: currentUser } = useAuth();
   const [trip, setTrip] = useState<any>(null);
-  const [progress, setProgress] = useState(0); // 0..1 along route — derived from GPS distance vs trip total
+  const [distanceM, setDistanceM] = useState(0); // accumulated GPS distance in metres
+  const [progress, setProgress] = useState(0); // 0..1 — distanceM / planned distance, capped at 1
   const [speed, setSpeed] = useState(0);
   const [displaySpeed, setDisplaySpeed] = useState(0);
   const [topSpeed, setTopSpeed] = useState(0);
@@ -67,7 +83,6 @@ export default function LiveRide() {
   const progressAnim = useRef(new Animated.Value(0)).current;
   // Refs so triggerSos (defined via useCallback below) always has fresh values
   // even when called from long-lived effects (crash detection, auto-SOS timer).
-  const liveMarkerRef = useRef<{ lat: number; lng: number }>({ lat: 0, lng: 0 });
   const speedRef = useRef(0);
   const headingRef = useRef(0);
   // Last GPS sample we used to derive a bearing — Expo's `coords.heading` is
@@ -86,18 +101,34 @@ export default function LiveRide() {
     return () => clearInterval(t);
   }, []);
 
-  // triggerSos is defined here (before the early return) so the crash-detection
-  // effect always captures a valid, stable reference. It reads liveMarkerRef and
-  // speedRef which are kept up-to-date via refs rather than stale closures.
+  // Refs that the SOS payload reads. Updated below via refs (not deps) so the
+  // callback identity stays stable for the crash-detection effect's listener.
+  const realPosRef = useRef<{ lat: number; lng: number } | null>(null);
+  useEffect(() => { realPosRef.current = realPos; }, [realPos]);
+
+  // Trigger an SOS. Uses the freshest GPS reading we have — never the trip-
+  // start fallback that the visible map marker uses for centering — because
+  // sending search-and-rescue to the start of the route is worse than asking
+  // the rider to wait two seconds for a fix.
   const triggerSos = useCallback(async () => {
+    const pos = realPosRef.current;
+    if (!pos) {
+      Alert.alert(
+        'Waiting for GPS',
+        "Can't send SOS without a real location fix yet. Hold on a few seconds and try again.",
+      );
+      return;
+    }
     try {
-      const pos = liveMarkerRef.current;
       const { data } = await api.post('/sos', {
         trip_id: id,
         lat: pos.lat,
         lng: pos.lng,
         speed_kmh: speedRef.current,
-        heading_deg: 0,
+        // Use the heading we computed from successive GPS samples. Was hard-
+        // coded to 0, which made every SOS map pin look like the rider was
+        // facing north regardless of actual travel direction.
+        heading_deg: headingRef.current,
       });
       router.replace(`/sos/${data.id}`);
     } catch (e: any) {
@@ -166,6 +197,12 @@ export default function LiveRide() {
     return () => clearInterval(t);
   }, []);
 
+  // Trip's planned total distance (km). Captured in a ref so `ingestSample`
+  // can compute progress without including `trip` in its deps and bouncing
+  // the location subscription on every trip refetch.
+  const plannedKmRef = useRef(0);
+  useEffect(() => { plannedKmRef.current = trip?.distance_km || 0; }, [trip?.distance_km]);
+
   // Common handler: ingest one GPS sample, push it through to state + refs.
   // Centralised so web (navigator.geolocation) and native (expo-location)
   // share identical filtering, heading derivation, and stat tracking.
@@ -207,10 +244,32 @@ export default function LiveRide() {
       if (dist > 0.00001) h = bearingDeg(last, next);
     }
     setHeading(h);
+
+    // Distance accumulator. Adds the haversine delta from the previous fix
+    // when we believe both fixes — the rider must be moving (filters GPS
+    // noise while stationary) and the segment must be ≤500m (filters cell-
+    // tower fallback teleports). Without this gate, a phone left on a desk
+    // would tick up distance from accuracy drift; without the cap a rider
+    // would jump 50km when the phone briefly dropped to coarse location.
+    if (last && moving) {
+      const segM = haversineMeters(last, next);
+      if (segM > 0 && segM < 500) {
+        setDistanceM(d => {
+          const total = d + segM;
+          const planned = plannedKmRef.current * 1000;
+          if (planned > 0) setProgress(Math.min(1, total / planned));
+          return total;
+        });
+      }
+    }
+
     lastSampleRef.current = { ...next, ts: Date.now() };
   }, []);
 
   // Real GPS (native) or browser geolocation (web) — graceful fallback.
+  // Permission denial is surfaced loudly: a silent failure here looks like
+  // the whole ride feature is broken (no speed, no map dot, no SOS coords)
+  // when actually one tap could fix it.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -228,28 +287,43 @@ export default function LiveRide() {
                   accuracy: pos.coords.accuracy,
                 });
               },
-              () => {},
+              (err) => {
+                if (cancelled) return;
+                if (err && err.code === 1 /* PERMISSION_DENIED */) {
+                  Alert.alert(
+                    'Location blocked',
+                    'Allow location access in your browser settings so the app can show your position and SOS coordinates.',
+                  );
+                }
+              },
               { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 }
             );
             locSub.current = { remove: () => navigator.geolocation.clearWatch(watchId) };
           }
         } else {
           const { status } = await Location.requestForegroundPermissionsAsync();
-          if (status === 'granted') {
-            locSub.current = await Location.watchPositionAsync(
-              { accuracy: Location.Accuracy.High, timeInterval: 2000, distanceInterval: 5 },
-              (pos) => {
-                if (cancelled) return;
-                ingestSample({
-                  lat: pos.coords.latitude,
-                  lng: pos.coords.longitude,
-                  speed: pos.coords.speed,
-                  heading: pos.coords.heading,
-                  accuracy: pos.coords.accuracy,
-                });
-              }
-            );
+          if (status !== 'granted') {
+            if (!cancelled) {
+              Alert.alert(
+                'Location permission needed',
+                'Open Settings → Apps → Broad → Permissions → Location and pick "Allow only while using the app" so your crew can see you on the map.',
+              );
+            }
+            return;
           }
+          locSub.current = await Location.watchPositionAsync(
+            { accuracy: Location.Accuracy.High, timeInterval: 2000, distanceInterval: 5 },
+            (pos) => {
+              if (cancelled) return;
+              ingestSample({
+                lat: pos.coords.latitude,
+                lng: pos.coords.longitude,
+                speed: pos.coords.speed,
+                heading: pos.coords.heading,
+                accuracy: pos.coords.accuracy,
+              });
+            }
+          );
         }
       } catch {}
     })();
@@ -315,12 +389,14 @@ export default function LiveRide() {
     }
   }, [bgActive, id]);
 
-  // Stop background tracking when leaving the ride screen — otherwise the
-  // foreground service notification stays pinned forever and the rider keeps
-  // broadcasting position to a trip they're no longer watching.
-  useEffect(() => {
-    return () => { stopBackgroundTracking().catch(() => {}); };
-  }, []);
+  // Note: we deliberately do NOT stop background tracking on unmount.
+  // - User toggling BG off explicitly is the foreground stop path.
+  // - Server returning `trip_not_active` (trip ended / rider removed) makes
+  //   the background task stop itself from inside `backgroundLocation.ts`.
+  // - Routing within the app (ride → trip detail → home) shouldn't kill BG
+  //   because the rider explicitly opted in for the whole ride duration.
+  // The previous version stopped BG on every unmount, which meant any nav
+  // away from the ride screen silently disabled the feature.
 
   // Convoy WebSocket — auto-reconnects on drops with exponential backoff.
   // `members` mirrors the latest server `state` payload; `sendPos` is a no-op
@@ -328,9 +404,30 @@ export default function LiveRide() {
   const onTripEnded = useCallback(() => {
     router.replace(`/complete/${id}`);
   }, [id, router]);
+  // Track SOS ids we've already alerted on. The same SOS may arrive through
+  // both this socket and the global listener — without dedupe we'd raise
+  // twice. Module-level Set isn't right because navigating away/back should
+  // re-show alerts that fired during a previous session.
+  const seenSosRef = useRef<Set<string>>(new Set());
+  const onSos = useCallback((sos: { sender: string; sender_user_id: string; sos_id: string }) => {
+    // Server already excludes the sender from its own broadcast to avoid the
+    // sender alerting themselves, but belt and braces: filter again locally.
+    if (sos.sender_user_id && currentUser?.id && sos.sender_user_id === currentUser.id) return;
+    if (seenSosRef.current.has(sos.sos_id)) return;
+    seenSosRef.current.add(sos.sos_id);
+    Alert.alert(
+      'SOS Alert',
+      `${sos.sender} has triggered an SOS. They may need help.`,
+      [
+        { text: 'Dismiss', style: 'cancel' },
+        { text: 'View SOS', onPress: () => router.push(`/sos/respond/${sos.sos_id}` as any) },
+      ],
+      { cancelable: false },
+    );
+  }, [currentUser?.id, router]);
   const { members: convoyMembers, state: convoyState, sendPos } = useConvoySocket(
     id,
-    { onTripEnded },
+    { onTripEnded, onSos },
   );
 
   // Broadcast own GPS position. Skip if no real fix yet — never send
@@ -391,10 +488,6 @@ export default function LiveRide() {
     });
   }
 
-  // Liver marker for SOS/payload purposes — always our own position.
-  const liveMarker = realPos || allPoints[0] || { lat: 0, lng: 0 };
-  liveMarkerRef.current = liveMarker;
-
   const fmtTime = (s: number) => {
     const h = Math.floor(s / 3600).toString().padStart(2, '0');
     const m = Math.floor((s % 3600) / 60).toString().padStart(2, '0');
@@ -402,7 +495,10 @@ export default function LiveRide() {
     return `${h}:${m}:${ss}`;
   };
 
-  const distanceCovered = (trip.distance_km * progress).toFixed(1);
+  // Actual kilometres travelled, derived from accumulated GPS deltas. Falls
+  // back to (planned * progress) when GPS gave us nothing — better than
+  // showing zero on a trip the rider clearly rode.
+  const distanceCovered = (distanceM > 0 ? distanceM / 1000 : trip.distance_km * progress).toFixed(1);
 
   const endTrip = async () => {
     try {
@@ -412,8 +508,19 @@ export default function LiveRide() {
         top_speed_kmh: topSpeed,
         duration_min: Math.round(elapsed / 60),
       });
+      // Stop background broadcast immediately — without this, the foreground
+      // service keeps firing for one more cycle until the server returns
+      // `trip_not_active`, which is a small but visible battery hit.
+      await stopBackgroundTracking().catch(() => {});
       router.replace(`/complete/${id}`);
-    } catch {}
+    } catch (e: any) {
+      // Don't navigate away on failure — riders should be able to retry rather
+      // than seeing the trip stuck on "active" because the patch silently 503'd.
+      Alert.alert(
+        "Couldn't end ride",
+        e?.response?.data?.detail || e?.message || 'Network error. Try again.',
+      );
+    }
   };
 
   return (

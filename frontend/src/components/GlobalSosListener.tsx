@@ -4,17 +4,25 @@ import { useRouter } from 'expo-router';
 import { api, storage, TOKEN_KEY } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
 
-// Live SOS convoy WebSocket. Disabled by default in production because the
-// REST proxy at broad-homepage.vercel.app does not tunnel WebSocket upgrades
-// (Vercel serverless limitation), so connecting would loop forever and drain
-// battery. SOS alerts still reach devices via Expo push (handled in
-// app/_layout.tsx) — the inbox + banner cover the alert path. To re-enable
-// the live in-app popup, set EXPO_PUBLIC_WS_URL to a host that supports WS
-// (e.g. Railway directly: wss://broad-backend.up.railway.app).
+// Live SOS convoy WebSocket base URL.
+//
+// Resolution order:
+//   1. EXPO_PUBLIC_WS_URL — explicit override. Used in production where the
+//      REST proxy at broad-homepage.vercel.app can't tunnel WS upgrades and
+//      we have to hit the Railway host directly.
+//   2. EXPO_PUBLIC_BACKEND_URL — local-dev fallback. The FastAPI process
+//      serving REST also serves WS, so reuse the same host.
+//
+// Without the fallback every dev build that only set BACKEND_URL got silent
+// SOS failure: push reached devices, but the in-app live alert was disabled
+// because there was no WS. That's how SOS alerts started missing other
+// riders even though the trip room was happily fanning out the message.
 const WS_BASE = (() => {
-  const ws = process.env.EXPO_PUBLIC_WS_URL;
-  if (ws) return ws.replace(/^http/, 'ws');
-  return null;
+  const explicit = process.env.EXPO_PUBLIC_WS_URL;
+  const backend = process.env.EXPO_PUBLIC_BACKEND_URL;
+  const base = explicit || backend;
+  if (!base) return null;
+  return base.replace(/^http/, 'ws');
 })();
 
 const MAX_RECONNECTS = 3;

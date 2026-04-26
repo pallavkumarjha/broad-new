@@ -53,7 +53,7 @@ export default function Plan() {
   const [end, setEnd] = useState(PRESETS[2]);
   const [plannedDate, setPlannedDate] = useState(() => startOfDay(new Date(Date.now() + DAY_MS * 3)));
   const [waypoints, setWaypoints] = useState<typeof PRESETS>([]);
-  const [crewList, setCrewList] = useState<string[]>(['Rhea', 'Kabir']);
+  const [crewList, setCrewList] = useState<string[]>([]);
   const [crewIdsList, setCrewIdsList] = useState<string[]>([]); // user IDs for push notifications
   const [crewPickerOpen, setCrewPickerOpen] = useState(false);
   const [crewQuery, setCrewQuery] = useState('');
