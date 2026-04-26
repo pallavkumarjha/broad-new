@@ -10,6 +10,14 @@ import { Eyebrow, Rule, Meta } from '../../src/components/ui';
 import { TripIllus, EmptyRoadIllus } from '../../src/components/illustrations';
 import { SkeletonTripCard } from '../../src/components/Skeleton';
 
+/** "2025-05-01" → "Thu, 1 May 2025" */
+function formatTripDate(raw: string | undefined | null): string {
+  if (!raw) return 'TBD';
+  const d = new Date(raw + 'T00:00:00');
+  if (isNaN(d.getTime())) return raw;
+  return d.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+}
+
 export default function Discover() {
   const router = useRouter();
   const { width } = useWindowDimensions();
@@ -181,7 +189,7 @@ export default function Discover() {
                 ) : null}
               </View>
               <View style={styles.cardBody}>
-                <Eyebrow>{(r.planned_date || 'TBD').toUpperCase()}</Eyebrow>
+                <Eyebrow>{formatTripDate(r.planned_date).toUpperCase()}</Eyebrow>
                 <Text style={[type.h2, { color: colors.light.ink, marginTop: 4 }]}>{r.name}</Text>
                 <Meta style={{ marginTop: space.sm }}>
                   {(r.start?.name || '').toUpperCase()} → {(r.end?.name || '').toUpperCase()}

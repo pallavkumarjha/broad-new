@@ -238,10 +238,18 @@ class Trip(TripCreate):
 
 
 class TripUpdate(BaseModel):
+    # Status transitions
     status: Optional[Literal["planned", "active", "completed", "cancelled"]] = None
+    # Ride stats — set at completion
     actual_distance_km: Optional[float] = None
     top_speed_kmh: Optional[float] = None
     duration_min: Optional[int] = None
+    # Editable metadata — organiser only, planned trips only
+    name: Optional[str] = None
+    planned_date: Optional[str] = None
+    notes: Optional[str] = None
+    description: Optional[str] = None
+    max_riders: Optional[int] = None
 
 
 class TripRequestCreate(BaseModel):
@@ -655,6 +663,13 @@ async def update_trip(trip_id: str, body: TripUpdate, user: dict = Depends(get_c
     if doc["user_id"] != user["id"]:
         raise HTTPException(status_code=403, detail="Forbidden")
     update = {k: v for k, v in body.dict(exclude_none=True).items()}
+    # Metadata edits (name, planned_date, notes, description, max_riders) are only
+    # valid on planned trips. Strip them silently if the trip has already started —
+    # we don't want active/completed trip names changing under riders' feet.
+    _METADATA_FIELDS = {"name", "planned_date", "notes", "description", "max_riders"}
+    if doc.get("status") != "planned":
+        for field in _METADATA_FIELDS:
+            update.pop(field, None)
     if body.status == "active" and not doc.get("started_at"):
         update["started_at"] = now_iso()
         # Notify confirmed crew that the ride has started (trigger event #4).

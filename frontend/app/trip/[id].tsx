@@ -22,6 +22,15 @@ import { MapView } from '../../src/components/MapView';
 
 type Role = 'organiser' | 'crew' | 'requester' | 'stranger' | 'declined';
 
+/** Convert "2025-05-01" → "Thu, 1 May 2025" for display. Falls back to the raw
+ * string if parsing fails so we never silently drop the date. */
+function formatTripDate(raw: string | undefined | null): string {
+  if (!raw) return '';
+  const d = new Date(raw + 'T00:00:00'); // force local midnight, avoid UTC shift
+  if (isNaN(d.getTime())) return raw;
+  return d.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+}
+
 export default function TripDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
@@ -249,11 +258,20 @@ export default function TripDetail() {
 
   const isPast = trip.status === 'completed';
 
-  // Header trash icon only visible to organiser of non-completed trips.
-  // Past trips are read-only — no destructive actions allowed.
-  const headerRight = isOrganiser && !isPast
-    ? <TouchableOpacity onPress={deleteTrip} testID="trip-delete-btn"><Feather name="trash-2" size={20} color={colors.light.inkMuted} /></TouchableOpacity>
-    : <View style={{ width: 20 }} />;
+  // Organiser header actions — only on non-completed trips.
+  // Edit (pencil) → edit screen. Trash → destructive delete with confirmation.
+  const headerRight = isOrganiser && !isPast ? (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
+      {trip.status === 'planned' && (
+        <TouchableOpacity onPress={() => router.push(`/trip/edit/${id}` as any)} testID="trip-edit-btn">
+          <Feather name="edit-2" size={20} color={colors.light.inkMuted} />
+        </TouchableOpacity>
+      )}
+      <TouchableOpacity onPress={deleteTrip} testID="trip-delete-btn">
+        <Feather name="trash-2" size={20} color={colors.light.inkMuted} />
+      </TouchableOpacity>
+    </View>
+  ) : <View style={{ width: 20 }} />;
 
   return (
     <SafeAreaView style={styles.container} testID="trip-detail-screen">
@@ -270,10 +288,12 @@ export default function TripDetail() {
       <ScrollView contentContainerStyle={{ paddingBottom: 180 }}>
         <View style={styles.titleBlock}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-            <Eyebrow>{(trip.planned_date || '').toUpperCase()}</Eyebrow>
+            {trip.planned_date ? (
+              <Eyebrow>{formatTripDate(trip.planned_date).toUpperCase()}</Eyebrow>
+            ) : null}
             {trip.is_public && (
               <>
-                <Text style={[type.meta, { color: colors.light.inkMuted }]}>·</Text>
+                {trip.planned_date ? <Text style={[type.meta, { color: colors.light.inkMuted }]}>·</Text> : null}
                 <Eyebrow color={colors.light.amber}>PUBLIC</Eyebrow>
               </>
             )}

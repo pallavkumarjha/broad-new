@@ -10,6 +10,14 @@ import { Eyebrow, Rule, Meta } from '../../src/components/ui';
 import { EmptyRoadIllus } from '../../src/components/illustrations';
 import { SkeletonTripRow } from '../../src/components/Skeleton';
 
+/** "2025-05-01" → "Thu, 1 May 2025" */
+function formatTripDate(raw: string | undefined | null): string {
+  if (!raw) return '';
+  const d = new Date(raw + 'T00:00:00');
+  if (isNaN(d.getTime())) return raw;
+  return d.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+}
+
 const TABS: { key: string; label: string }[] = [
   { key: 'active', label: 'ACTIVE' },
   { key: 'planned', label: 'UPCOMING' },
@@ -129,7 +137,7 @@ export default function Trips() {
             <TouchableOpacity key={t.id} testID={`trip-row-${t.id}`} activeOpacity={0.7} onPress={() => router.push(t.status === 'active' ? `/ride/${t.id}` : `/trip/${t.id}`)} style={styles.row}>
               <View style={{ flex: 1 }}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                  <Eyebrow>{(t.planned_date || '').toUpperCase()}</Eyebrow>
+                  <Eyebrow>{formatTripDate(t.planned_date).toUpperCase() || ''}</Eyebrow>
                   {hasPending && (
                     <View style={styles.rowBadge} testID={`trip-row-pending-${t.id}`}>
                       <Meta style={{ color: colors.light.bg }}>PENDING</Meta>

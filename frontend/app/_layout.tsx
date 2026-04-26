@@ -119,6 +119,8 @@ export default function RootLayout() {
             <Stack.Screen name="sos/[id]" options={{ animation: 'fade' }} />
             <Stack.Screen name="sos/respond/[id]" options={{ animation: 'fade' }} />
             <Stack.Screen name="sos/safe/[id]" options={{ animation: 'fade' }} />
+            {/* Edit trip — slides up like plan sheet */}
+            <Stack.Screen name="trip/edit/[id]" options={{ animation: 'slide_from_bottom' }} />
             {/* Auth — crossfade, not directional */}
             <Stack.Screen name="(auth)" options={{ animation: 'fade' }} />
           </Stack>
