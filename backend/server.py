@@ -241,15 +241,22 @@ class TripUpdate(BaseModel):
     # Status transitions
     status: Optional[Literal["planned", "active", "completed", "cancelled"]] = None
     # Ride stats — set at completion
-    actual_distance_km: Optional[float] = None
-    top_speed_kmh: Optional[float] = None
-    duration_min: Optional[int] = None
-    # Editable metadata — organiser only, planned trips only
-    name: Optional[str] = None
-    planned_date: Optional[str] = None
-    notes: Optional[str] = None
-    description: Optional[str] = None
-    max_riders: Optional[int] = None
+    actual_distance_km: Optional[float] = Field(None, ge=0)
+    top_speed_kmh: Optional[float] = Field(None, ge=0, le=400)
+    duration_min: Optional[int] = Field(None, ge=0)
+    # Editable metadata — organiser only, planned trips only.
+    # Bounds match the frontend constraints; without these, a hand-crafted
+    # PATCH could store empty names, 99999 max_riders, or arbitrary date strings.
+    name: Optional[str] = Field(None, min_length=1, max_length=120)
+    # Strict YYYY-MM-DD; the frontend always serialises this shape, so a
+    # mismatch here means a client bug we want to surface as 422.
+    planned_date: Optional[str] = Field(None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+    notes: Optional[str] = Field(None, max_length=2000)
+    description: Optional[str] = Field(None, max_length=500)
+    # Hard ceiling matches Plan/Edit screens. Floor of 1 is the absolute
+    # minimum (organiser); we additionally enforce >= current crew_ids+1
+    # at the endpoint level since that bound depends on the trip doc.
+    max_riders: Optional[int] = Field(None, ge=1, le=50)
 
 
 class TripRequestCreate(BaseModel):
@@ -271,11 +278,17 @@ class TripRequest(BaseModel):
 
 class SOSCreate(BaseModel):
     trip_id: Optional[str] = None
-    lat: float
-    lng: float
-    speed_kmh: float = 0
-    heading_deg: float = 0
-    note: Optional[str] = ""
+    # Geo bounds validated by pydantic — ensures bogus payloads (lat=999, etc.)
+    # never make it into the convoy fanout or the responder's map pin.
+    lat: float = Field(..., ge=-90, le=90)
+    lng: float = Field(..., ge=-180, le=180)
+    # Cap speed at the same ceiling we use for ConvoyHub pos validation.
+    # Anything above _MAX_SPEED_KMH is GPS noise / a teleport.
+    speed_kmh: float = Field(0, ge=0, le=400)
+    # Heading is degrees clockwise from north. 360 lets the client send
+    # a normalised wrap if it pre-modded; we clamp on read either way.
+    heading_deg: float = Field(0, ge=0, le=360)
+    note: Optional[str] = Field("", max_length=500)
 
 
 class SOSEvent(SOSCreate):
@@ -664,12 +677,27 @@ async def update_trip(trip_id: str, body: TripUpdate, user: dict = Depends(get_c
         raise HTTPException(status_code=403, detail="Forbidden")
     update = {k: v for k, v in body.dict(exclude_none=True).items()}
     # Metadata edits (name, planned_date, notes, description, max_riders) are only
-    # valid on planned trips. Strip them silently if the trip has already started —
-    # we don't want active/completed trip names changing under riders' feet.
+    # valid on planned trips. Reject the whole PATCH with 400 if the caller is
+    # trying to edit metadata on an active/completed trip — silently dropping
+    # the fields would let the frontend show "saved" without any change taking
+    # effect, which is worse than a clear failure.
     _METADATA_FIELDS = {"name", "planned_date", "notes", "description", "max_riders"}
-    if doc.get("status") != "planned":
-        for field in _METADATA_FIELDS:
-            update.pop(field, None)
+    metadata_in_body = _METADATA_FIELDS & update.keys()
+    if metadata_in_body and doc.get("status") != "planned":
+        raise HTTPException(
+            status_code=400,
+            detail="Trip has already started — name, date, notes, description and max_riders can't be changed.",
+        )
+    # Clamp max_riders so it never drops below current confirmed crew (organiser
+    # + crew_ids). Otherwise the org could "soft-kick" riders by lowering the
+    # cap, leaving the trip in an over-capacity state.
+    if "max_riders" in update:
+        min_required = 1 + len(doc.get("crew_ids") or [])
+        if update["max_riders"] < min_required:
+            raise HTTPException(
+                status_code=400,
+                detail=f"max_riders cannot drop below current crew count ({min_required}).",
+            )
     if body.status == "active" and not doc.get("started_at"):
         update["started_at"] = now_iso()
         # Notify confirmed crew that the ride has started (trigger event #4).
@@ -1051,6 +1079,21 @@ async def trigger_sos(body: SOSCreate, request: Request, user: dict = Depends(ge
     # SOS notifies crew via push + WebSocket. Cap at 5/hour per user — enough for a real
     # emergency + retries, tight enough to block spam without stranding a user in a crash.
     _rate_limit(user["id"], max_hits=5, window=3600, scope="sos")
+    # Authorise the trip_id BEFORE we accept it. Without this, an authenticated
+    # user could fan SOS into any trip room they're not on (privacy + abuse).
+    # We strip an unauthorised trip_id rather than 400 — the SOS itself is
+    # legit, we just won't broadcast to a room the user isn't in.
+    payload = body.dict()
+    if payload.get("trip_id"):
+        trip = await db.trips.find_one(
+            {"id": payload["trip_id"]}, {"_id": 0, "user_id": 1, "crew_ids": 1}
+        )
+        on_trip = bool(trip) and (
+            trip.get("user_id") == user["id"]
+            or user["id"] in (trip.get("crew_ids") or [])
+        )
+        if not on_trip:
+            payload["trip_id"] = None
     sid = str(uuid.uuid4())
     doc = {
         "id": sid,
@@ -1058,7 +1101,7 @@ async def trigger_sos(body: SOSCreate, request: Request, user: dict = Depends(ge
         "status": "active",
         "created_at": now_iso(),
         "resolved_at": None,
-        **body.dict(),
+        **payload,
     }
     await db.sos_events.insert_one(doc)
     doc.pop("_id", None)
@@ -1066,8 +1109,10 @@ async def trigger_sos(body: SOSCreate, request: Request, user: dict = Depends(ge
     # Notify crew in-app (WebSocket) + push (fire-and-forget — never block SOS response)
     import asyncio
     sender_name = user.get("name", "A rider")
-    if body.trip_id:
-        asyncio.ensure_future(hub.broadcast_sos(body.trip_id, sender_name, user["id"], sid))
+    # Use the authorised trip_id (payload value), not the raw request body.
+    # Body may have been stripped above if the user wasn't on that trip.
+    if doc.get("trip_id"):
+        asyncio.ensure_future(hub.broadcast_sos(doc["trip_id"], sender_name, user["id"], sid))
     asyncio.ensure_future(_notify_sos_crew(doc, sender_name))
     return SOSEvent(**doc)
 

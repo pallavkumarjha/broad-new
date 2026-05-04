@@ -10,13 +10,12 @@ import { Eyebrow, Rule, Meta } from '../../src/components/ui';
 import { TripIllus, EmptyRoadIllus } from '../../src/components/illustrations';
 import { SkeletonTripCard } from '../../src/components/Skeleton';
 
-/** "2025-05-01" → "Thu, 1 May 2025" */
-function formatTripDate(raw: string | undefined | null): string {
-  if (!raw) return 'TBD';
-  const d = new Date(raw + 'T00:00:00');
-  if (isNaN(d.getTime())) return raw;
-  return d.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
-}
+import { formatTripDate as fmtTrip } from '../../src/lib/dates';
+
+/** Discover-specific wrapper — empty date renders as "TBD" here, where unset
+ * means "organiser hasn't picked a date yet"; on Trips/TripDetail empty just
+ * means hide the field entirely. */
+const formatTripDate = (raw: string | undefined | null) => fmtTrip(raw) || 'TBD';
 
 export default function Discover() {
   const router = useRouter();
