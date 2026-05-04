@@ -105,12 +105,17 @@ export default function LiveRide() {
   // callback identity stays stable for the crash-detection effect's listener.
   const realPosRef = useRef<{ lat: number; lng: number } | null>(null);
   useEffect(() => { realPosRef.current = realPos; }, [realPos]);
+  // Guard against double-tap / multiple paths into triggerSos (long-press
+  // button + crash auto-fire + crash "Send SOS now"). Without this we used
+  // to create two SOS events for one incident.
+  const sosInflight = useRef(false);
 
   // Trigger an SOS. Uses the freshest GPS reading we have — never the trip-
   // start fallback that the visible map marker uses for centering — because
   // sending search-and-rescue to the start of the route is worse than asking
   // the rider to wait two seconds for a fix.
   const triggerSos = useCallback(async () => {
+    if (sosInflight.current) return;
     const pos = realPosRef.current;
     if (!pos) {
       Alert.alert(
@@ -119,6 +124,7 @@ export default function LiveRide() {
       );
       return;
     }
+    sosInflight.current = true;
     try {
       const { data } = await api.post('/sos', {
         trip_id: id,
@@ -132,6 +138,9 @@ export default function LiveRide() {
       });
       router.replace(`/sos/${data.id}`);
     } catch (e: any) {
+      // Reset on failure so the rider can retry. Success path navigates away
+      // and the screen unmounts, so the flag never needs to flip back.
+      sosInflight.current = false;
       Alert.alert('SOS failed to send', e?.response?.data?.detail || e?.message || 'Network error');
     }
   }, [id, router]);
@@ -330,7 +339,29 @@ export default function LiveRide() {
     return () => { cancelled = true; try { locSub.current?.remove?.(); } catch {} };
   }, [ingestSample]);
 
-  // Crash detection (accelerometer magnitude > 3.5g peak)
+  // Crash detection. Compares the magnitude of consecutive accelerometer
+  // samples (Δ in g-units between two ~200ms reads) against a threshold.
+  //
+  // CRASH_DELTA_G = 4.0
+  //   Empirically: hard pothole hits at 80km/h read ~2.0–3.0, an actual
+  //   off-from-bike event reads 5+. 3.5 was triggering on speed bumps.
+  //   Tighten until field testing tells us otherwise.
+  //
+  // AUTO_SOS_MS = 10_000
+  //   Soft countdown so the rider can cancel before SOS fires. We expose
+  //   this via Alert; in a follow-up we'll add an in-screen visual countdown.
+  const CRASH_DELTA_G = 4.0;
+  const AUTO_SOS_MS = 10_000;
+  // Refs for the auto-SOS timer so all three exit paths (I'm fine, Send SOS now,
+  // unmount) cancel it. Without this, "Send SOS now" used to fire AND the timer
+  // also fired 10s later, producing two SOS events for one incident.
+  const autoSosTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reArmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearCrashTimers = () => {
+    if (autoSosTimerRef.current) { clearTimeout(autoSosTimerRef.current); autoSosTimerRef.current = null; }
+    if (reArmTimerRef.current) { clearTimeout(reArmTimerRef.current); reArmTimerRef.current = null; }
+  };
+
   useEffect(() => {
     if (!settings.crashDetect) return;
     try { Accelerometer.setUpdateInterval(200); } catch {}
@@ -338,25 +369,53 @@ export default function LiveRide() {
       const prev = lastAccel.current;
       const delta = Math.sqrt((x - prev.x) ** 2 + (y - prev.y) ** 2 + (z - prev.z) ** 2);
       lastAccel.current = { x, y, z };
-      if (delta > 3.5 && !crashHandled.current) {
+      if (delta > CRASH_DELTA_G && !crashHandled.current) {
         crashHandled.current = true;
         Alert.alert(
           'Possible crash detected',
-          'Are you okay? SOS will auto-trigger in 10s.',
+          `Are you okay? SOS will auto-trigger in ${Math.round(AUTO_SOS_MS / 1000)}s.`,
           [
-            { text: "I'm fine", onPress: () => { setTimeout(() => { crashHandled.current = false; }, 5000); } },
-            { text: 'Send SOS now', style: 'destructive', onPress: () => triggerSos() },
+            {
+              text: "I'm fine",
+              onPress: () => {
+                // Cancel the auto-SOS timer immediately. Re-arm crash detection
+                // after a 5s grace period so we don't re-trigger on the same
+                // event sequence.
+                clearCrashTimers();
+                reArmTimerRef.current = setTimeout(() => {
+                  crashHandled.current = false;
+                  reArmTimerRef.current = null;
+                }, 5000);
+              },
+            },
+            {
+              text: 'Send SOS now',
+              style: 'destructive',
+              onPress: () => {
+                // Cancel the auto-SOS timer FIRST so we don't double-fire.
+                // triggerSos has its own in-flight guard but cancelling is
+                // cheaper than depending on it.
+                clearCrashTimers();
+                triggerSos();
+              },
+            },
           ],
           { cancelable: false }
         );
-        setTimeout(() => {
+        autoSosTimerRef.current = setTimeout(() => {
+          autoSosTimerRef.current = null;
           if (crashHandled.current) triggerSos();
-        }, 10000);
+        }, AUTO_SOS_MS);
       }
     });
     accelSub.current = sub;
-    return () => { try { sub.remove(); } catch {} };
-  }, [settings.crashDetect]);
+    return () => {
+      try { sub.remove(); } catch {}
+      // Cancel any pending auto-SOS / re-arm so they don't fire after the
+      // ride screen unmounts (eg. user navigates away during the 10s window).
+      clearCrashTimers();
+    };
+  }, [settings.crashDetect, triggerSos]);
 
   // Background-location toggle. Default off — riders opt in per ride because
   // it's a battery cost they should consciously accept (and because Android's

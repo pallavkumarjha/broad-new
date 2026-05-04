@@ -22,15 +22,15 @@ const PRESETS = [
   { name: 'Shimla', lat: 31.1048, lng: 77.1734 },
 ];
 
+import { toIsoDate } from '../src/lib/dates';
+
 const DAY_MS = 86400000;
 
+// `startOfDay` here truncates an arbitrary date to local midnight (not just
+// today) — kept local because the shared lib only exposes `startOfToday`.
 const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
-const toIsoDate = (d: Date) => {
-  const y = d.getFullYear();
-  const m = `${d.getMonth() + 1}`.padStart(2, '0');
-  const day = `${d.getDate()}`.padStart(2, '0');
-  return `${y}-${m}-${day}`;
-};
+
+// Picker-screen-specific UI strings — kept local because they're only used here.
 const formatPlannedDate = (d: Date) => d.toLocaleDateString('en-IN', {
   weekday: 'short',
   day: 'numeric',

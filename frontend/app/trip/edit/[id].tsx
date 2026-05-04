@@ -12,30 +12,28 @@ import { queryClient } from '../../../src/lib/queryClient';
 import { colors, type, space, radius } from '../../../src/theme/tokens';
 import { Eyebrow, Button, Rule, Meta, ErrorStrip } from '../../../src/components/ui';
 
-// ── Date helpers (mirrors plan.tsx) ──────────────────────────────────────────
+import { toIsoDate, parsePlannedDate, startOfToday } from '../../../src/lib/dates';
+
+// ── Date helpers ─────────────────────────────────────────────────────────────
+// formatPlannedDate / relativeDateLabel are picker-screen-specific so they
+// stay local. The shared canonical helpers (parse / serialise / today)
+// come from src/lib/dates.
 const DAY_MS = 86400000;
-const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
-const toIsoDate = (d: Date) => {
-  const y = d.getFullYear();
-  const m = `${d.getMonth() + 1}`.padStart(2, '0');
-  const day = `${d.getDate()}`.padStart(2, '0');
-  return `${y}-${m}-${day}`;
-};
 const formatPlannedDate = (d: Date) =>
   d.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
 const relativeDateLabel = (d: Date) => {
-  const today = startOfDay(new Date());
-  const diff = Math.round((startOfDay(d).getTime() - today.getTime()) / DAY_MS);
+  const today = startOfToday();
+  const diff = Math.round((new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() - today.getTime()) / DAY_MS);
   if (diff === 0) return 'TODAY';
   if (diff === 1) return 'TOMORROW';
   if (diff > 1) return `IN ${diff} DAYS`;
   return `${Math.abs(diff)} DAYS AGO`;
 };
-/** Parse an ISO date string "YYYY-MM-DD" to a local-midnight Date. */
-const parseIsoDate = (s: string): Date => {
-  const d = new Date(s + 'T00:00:00');
-  return isNaN(d.getTime()) ? startOfDay(new Date()) : d;
-};
+/** Parse a `YYYY-MM-DD` to a local-midnight Date, falling back to today
+ * if the string can't be parsed. The shared `parsePlannedDate` returns
+ * `null` on failure; this wrapper supplies the today-fallback the edit
+ * screen wants so a corrupt `planned_date` doesn't crash the picker. */
+const parseIsoDate = (s: string): Date => parsePlannedDate(s) ?? startOfToday();
 
 const invalidateTripCaches = () => {
   queryClient.invalidateQueries({ queryKey: ['trips', 'mine'] });
