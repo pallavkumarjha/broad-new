@@ -74,7 +74,11 @@ export default function LiveRide() {
   // updated_at vs Date.now()) actually picks up missing ticks even when
   // no fresh WS message has arrived to trigger a render.
   const [, setTick] = useState(0);
-  const startedAt = useRef(Date.now());
+  // Source of truth for "when did this ride start". Initialised to mount-time
+  // as a placeholder, then overwritten with `trip.started_at` from the DB once
+  // the trip loads. Without this, opening the ride screen 30 minutes into a
+  // ride showed a fresh 00:00 elapsed clock instead of the real elapsed time.
+  const startedAt = useRef<number>(Date.now());
   const locSub = useRef<any>(null);
   const accelSub = useRef<any>(null);
   const lastAccel = useRef({ x: 0, y: 0, z: 0 });
@@ -167,6 +171,20 @@ export default function LiveRide() {
       try {
         const { data } = await api.get(`/trips/${id}`);
         setTrip(data);
+        // Anchor the elapsed clock to when the ride actually started, not when
+        // this screen mounted. If the rider re-opens the ride 30 min in, the
+        // clock should read 0:30:xx, not 0:00:01. `started_at` is an ISO string
+        // set by the backend when the organiser hits START TRIP; if it's
+        // missing for any reason, leave the mount-time fallback in place.
+        if (data?.started_at) {
+          const ts = Date.parse(data.started_at);
+          if (!Number.isNaN(ts)) {
+            startedAt.current = ts;
+            // Push one immediate tick so the displayed elapsed jumps to the
+            // real value without waiting up to a second for the interval.
+            setElapsed(Math.floor((Date.now() - ts) / 1000));
+          }
+        }
       } catch {}
     })();
   }, [id]);
