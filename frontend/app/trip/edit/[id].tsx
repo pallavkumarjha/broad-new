@@ -49,7 +49,7 @@ export default function EditTrip() {
 
   // Editable fields — seeded from loaded trip
   const [name, setName] = useState('');
-  const [plannedDate, setPlannedDate] = useState<Date>(startOfDay(new Date()));
+  const [plannedDate, setPlannedDate] = useState<Date>(startOfToday());
   const [notes, setNotes] = useState('');
   const [description, setDescription] = useState('');
   const [maxRiders, setMaxRiders] = useState(8);
@@ -92,7 +92,7 @@ export default function EditTrip() {
   }, [datePickerOpen, datePickerAnim]);
 
   const dateOptions = useMemo(() => {
-    const today = startOfDay(new Date());
+    const today = startOfToday();
     return Array.from({ length: 60 }, (_, i) => {
       const date = new Date(today.getTime() + i * DAY_MS);
       return {
