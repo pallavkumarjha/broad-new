@@ -20,16 +20,9 @@ import { colors, type, space, radius } from '../../src/theme/tokens';
 import { Eyebrow, Rule, SpecRow, Button, Meta, Card } from '../../src/components/ui';
 import { MapView } from '../../src/components/MapView';
 
-type Role = 'organiser' | 'crew' | 'requester' | 'stranger' | 'declined';
+import { formatTripDate } from '../../src/lib/dates';
 
-/** Convert "2025-05-01" → "Thu, 1 May 2025" for display. Falls back to the raw
- * string if parsing fails so we never silently drop the date. */
-function formatTripDate(raw: string | undefined | null): string {
-  if (!raw) return '';
-  const d = new Date(raw + 'T00:00:00'); // force local midnight, avoid UTC shift
-  if (isNaN(d.getTime())) return raw;
-  return d.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
-}
+type Role = 'organiser' | 'crew' | 'requester' | 'stranger' | 'declined';
 
 export default function TripDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();

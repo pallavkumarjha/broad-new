@@ -9,14 +9,7 @@ import { colors, type, space } from '../../src/theme/tokens';
 import { Eyebrow, Rule, Meta } from '../../src/components/ui';
 import { EmptyRoadIllus } from '../../src/components/illustrations';
 import { SkeletonTripRow } from '../../src/components/Skeleton';
-
-/** "2025-05-01" → "Thu, 1 May 2025" */
-function formatTripDate(raw: string | undefined | null): string {
-  if (!raw) return '';
-  const d = new Date(raw + 'T00:00:00');
-  if (isNaN(d.getTime())) return raw;
-  return d.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
-}
+import { formatTripDate } from '../../src/lib/dates';
 
 const TABS: { key: string; label: string }[] = [
   { key: 'active', label: 'ACTIVE' },
