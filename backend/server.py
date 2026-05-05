@@ -1153,14 +1153,20 @@ async def get_sos_detail(sos_id: str, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=403, detail="Forbidden")
 
     sender = await db.users.find_one({"id": doc["user_id"]}, {"_id": 0, "name": 1, "email": 1, "emergency_contacts": 1})
+    # If the sender's user doc is missing (deleted account / corrupt data), the
+    # responder shouldn't see the viewer's own email or a hardcoded fallback —
+    # both were misleading. 404 is the honest answer: the SOS exists but its
+    # sender no longer does, so there's nothing meaningful to render.
+    if not sender:
+        raise HTTPException(status_code=404, detail="SOS sender no longer exists")
     primary = None
-    contacts = (sender or {}).get("emergency_contacts") or []
+    contacts = sender.get("emergency_contacts") or []
     if contacts:
         primary = SOSContact(**contacts[0])
     return SOSDetail(
         **doc,
-        sender_name=(sender or {}).get("name", "Rider"),
-        sender_email=(sender or {}).get("email", user.get("email", "rider@broad.app")),
+        sender_name=sender.get("name", "Rider"),
+        sender_email=sender.get("email", ""),
         emergency_contact=primary,
     )
 

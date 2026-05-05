@@ -109,22 +109,46 @@ export default function LiveRide() {
   // callback identity stays stable for the crash-detection effect's listener.
   const realPosRef = useRef<{ lat: number; lng: number } | null>(null);
   useEffect(() => { realPosRef.current = realPos; }, [realPos]);
+  // Last-known position fallback for SOS. Updated whenever a fresh GPS
+  // sample lands; preserved across signal loss so a rider in a tunnel can
+  // still trigger SOS with their last good location instead of being blocked
+  // by "waiting for GPS". The note string we send tells responders how stale
+  // the fix is so they know whether to trust the pin.
+  const lastKnownPosRef = useRef<{ lat: number; lng: number; ts: number } | null>(null);
+  useEffect(() => {
+    if (realPos) {
+      lastKnownPosRef.current = { lat: realPos.lat, lng: realPos.lng, ts: Date.now() };
+    }
+  }, [realPos]);
   // Guard against double-tap / multiple paths into triggerSos (long-press
   // button + crash auto-fire + crash "Send SOS now"). Without this we used
   // to create two SOS events for one incident.
   const sosInflight = useRef(false);
 
-  // Trigger an SOS. Uses the freshest GPS reading we have — never the trip-
-  // start fallback that the visible map marker uses for centering — because
-  // sending search-and-rescue to the start of the route is worse than asking
-  // the rider to wait two seconds for a fix.
+  // Trigger an SOS.
+  //
+  // Position selection (in priority order):
+  //   1. Fresh `realPos` — current GPS fix, best case.
+  //   2. `lastKnownPos` — most recent fix we ever had this session. Note
+  //      string flags how stale it is so responders see "STALE: 47s ago".
+  //   3. Nothing → refuse, prompt the rider to wait. We never fall back to
+  //      trip start coordinates — sending S&R to the wrong location is a
+  //      worse failure than asking the rider to wait two seconds.
   const triggerSos = useCallback(async () => {
     if (sosInflight.current) return;
-    const pos = realPosRef.current;
+    let pos: { lat: number; lng: number } | null = realPosRef.current;
+    let note = '';
+    if (!pos && lastKnownPosRef.current) {
+      const ageS = Math.round((Date.now() - lastKnownPosRef.current.ts) / 1000);
+      pos = { lat: lastKnownPosRef.current.lat, lng: lastKnownPosRef.current.lng };
+      // Emergency contacts and crew see this string in the SOS detail view.
+      // Keep it short — `note` field caps at 500 chars on the server.
+      note = `Last known position: ${ageS}s old`;
+    }
     if (!pos) {
       Alert.alert(
         'Waiting for GPS',
-        "Can't send SOS without a real location fix yet. Hold on a few seconds and try again.",
+        "No location fix yet — not even a stale one. Wait a few seconds for the GPS to lock and try again.",
       );
       return;
     }
@@ -139,6 +163,7 @@ export default function LiveRide() {
         // coded to 0, which made every SOS map pin look like the rider was
         // facing north regardless of actual travel direction.
         heading_deg: headingRef.current,
+        ...(note ? { note } : {}),
       });
       router.replace(`/sos/${data.id}`);
     } catch (e: any) {
@@ -375,10 +400,35 @@ export default function LiveRide() {
   // also fired 10s later, producing two SOS events for one incident.
   const autoSosTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reArmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const clearCrashTimers = () => {
+  const countdownTickRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Countdown UI state. When non-null, the in-screen overlay renders showing
+  // remaining seconds + "I'm fine" / "Send SOS now" buttons. Replaces the
+  // system Alert so the rider can actually see the timer counting down — the
+  // old Alert just had a static message and gave no feedback that time was
+  // ticking until SOS auto-fired.
+  const [crashCountdown, setCrashCountdown] = useState<number | null>(null);
+  const clearCrashTimers = useCallback(() => {
     if (autoSosTimerRef.current) { clearTimeout(autoSosTimerRef.current); autoSosTimerRef.current = null; }
     if (reArmTimerRef.current) { clearTimeout(reArmTimerRef.current); reArmTimerRef.current = null; }
-  };
+    if (countdownTickRef.current) { clearInterval(countdownTickRef.current); countdownTickRef.current = null; }
+    setCrashCountdown(null);
+  }, []);
+
+  // "I'm fine" — dismisses the overlay, cancels auto-SOS, re-arms crash
+  // detection after a 5s grace window.
+  const dismissCrash = useCallback(() => {
+    clearCrashTimers();
+    reArmTimerRef.current = setTimeout(() => {
+      crashHandled.current = false;
+      reArmTimerRef.current = null;
+    }, 5000);
+  }, [clearCrashTimers]);
+
+  // "Send SOS now" — fires immediately, cancels timer to avoid double-fire.
+  const confirmCrashSos = useCallback(() => {
+    clearCrashTimers();
+    triggerSos();
+  }, [clearCrashTimers, triggerSos]);
 
   useEffect(() => {
     if (!settings.crashDetect) return;
@@ -389,39 +439,16 @@ export default function LiveRide() {
       lastAccel.current = { x, y, z };
       if (delta > CRASH_DELTA_G && !crashHandled.current) {
         crashHandled.current = true;
-        Alert.alert(
-          'Possible crash detected',
-          `Are you okay? SOS will auto-trigger in ${Math.round(AUTO_SOS_MS / 1000)}s.`,
-          [
-            {
-              text: "I'm fine",
-              onPress: () => {
-                // Cancel the auto-SOS timer immediately. Re-arm crash detection
-                // after a 5s grace period so we don't re-trigger on the same
-                // event sequence.
-                clearCrashTimers();
-                reArmTimerRef.current = setTimeout(() => {
-                  crashHandled.current = false;
-                  reArmTimerRef.current = null;
-                }, 5000);
-              },
-            },
-            {
-              text: 'Send SOS now',
-              style: 'destructive',
-              onPress: () => {
-                // Cancel the auto-SOS timer FIRST so we don't double-fire.
-                // triggerSos has its own in-flight guard but cancelling is
-                // cheaper than depending on it.
-                clearCrashTimers();
-                triggerSos();
-              },
-            },
-          ],
-          { cancelable: false }
-        );
+        // Open the in-screen countdown overlay. The visible timer ticks down
+        // every second so the rider sees how long they have to react.
+        setCrashCountdown(Math.round(AUTO_SOS_MS / 1000));
+        countdownTickRef.current = setInterval(() => {
+          setCrashCountdown((n) => (n == null || n <= 0 ? n : n - 1));
+        }, 1000);
         autoSosTimerRef.current = setTimeout(() => {
           autoSosTimerRef.current = null;
+          if (countdownTickRef.current) { clearInterval(countdownTickRef.current); countdownTickRef.current = null; }
+          setCrashCountdown(null);
           if (crashHandled.current) triggerSos();
         }, AUTO_SOS_MS);
       }
@@ -429,11 +456,11 @@ export default function LiveRide() {
     accelSub.current = sub;
     return () => {
       try { sub.remove(); } catch {}
-      // Cancel any pending auto-SOS / re-arm so they don't fire after the
-      // ride screen unmounts (eg. user navigates away during the 10s window).
+      // Cancel any pending auto-SOS / re-arm + tick so they don't fire after
+      // the ride screen unmounts (eg. user navigates away during the 10s window).
       clearCrashTimers();
     };
-  }, [settings.crashDetect, triggerSos]);
+  }, [settings.crashDetect, triggerSos, clearCrashTimers]);
 
   // Background-location toggle. Default off — riders opt in per ride because
   // it's a battery cost they should consciously accept (and because Android's
@@ -502,7 +529,7 @@ export default function LiveRide() {
       { cancelable: false },
     );
   }, [currentUser?.id, router]);
-  const { members: convoyMembers, state: convoyState, sendPos } = useConvoySocket(
+  const { members: convoyMembers, state: convoyState, sendPos, retry: retryConvoy } = useConvoySocket(
     id,
     { onTripEnded, onSos },
   );
@@ -606,11 +633,27 @@ export default function LiveRide() {
       <SafeAreaView style={{ flex: 1 }} edges={['top', 'bottom']}>
           <View style={styles.header}>
             <TouchableOpacity onPress={() => router.back()} testID="ride-close-btn"><Feather name="x" size={22} color={colors.dark.ink} /></TouchableOpacity>
-            <Eyebrow color={colors.dark.amber}>
-              ● LIVE — {trip.name.toUpperCase()} {gpsActive ? '· GPS' : '· WAITING FOR FIX'}
-              {convoyState.kind === 'reconnecting' ? ` · RECONNECTING…` : ''}
-              {convoyState.kind === 'failed' ? ` · OFFLINE` : ''}
-            </Eyebrow>
+            <View style={{ flex: 1, alignItems: 'center' }}>
+              <Eyebrow color={colors.dark.amber}>
+                ● LIVE — {trip.name.toUpperCase()} {gpsActive ? '· GPS' : '· WAITING FOR FIX'}
+                {convoyState.kind === 'reconnecting' ? ` · RECONNECTING…` : ''}
+                {convoyState.kind === 'failed' ? ` · OFFLINE` : ''}
+              </Eyebrow>
+              {/* Manual retry — only shown after auto-reconnect has given up
+                  (terminal close codes 4401/4403/4404/4409/4410/4411). Without
+                  this the rider was stranded on "OFFLINE" with no way back. */}
+              {convoyState.kind === 'failed' && (
+                <TouchableOpacity
+                  onPress={retryConvoy}
+                  testID="ride-convoy-retry-btn"
+                  style={styles.retryPill}
+                  activeOpacity={0.85}
+                >
+                  <Feather name="refresh-cw" size={11} color={colors.dark.amber} />
+                  <Meta style={{ color: colors.dark.amber, marginLeft: 4 }}>RETRY CONVOY</Meta>
+                </TouchableOpacity>
+              )}
+            </View>
             <TouchableOpacity onPress={endTrip} testID="ride-end-btn"><Meta style={{ color: colors.dark.amber }}>END</Meta></TouchableOpacity>
           </View>
           {/* M2 — Ride progress hairline */}
@@ -695,6 +738,45 @@ export default function LiveRide() {
           <SOSButton onTrigger={triggerSos} testID="live-sos-button" />
         </View>
       </SafeAreaView>
+
+      {/* Crash-detection countdown overlay. Replaces the system Alert so the
+          rider sees the timer ticking down. Two paths out: dismiss (re-arm
+          after 5s grace) or fire SOS now. Auto-fires when countdown hits 0. */}
+      {crashCountdown != null && (
+        <View style={styles.crashOverlay} testID="crash-countdown-overlay" pointerEvents="auto">
+          <View style={styles.crashCard}>
+            <Eyebrow color={colors.dark.sos}>● POSSIBLE CRASH DETECTED</Eyebrow>
+            <Text style={[type.h1, { color: colors.dark.ink, marginTop: space.md }]}>
+              Are you okay?
+            </Text>
+            <Text style={[type.bodyLg, { color: colors.dark.inkMuted, marginTop: space.sm }]}>
+              SOS auto-trigger in
+            </Text>
+            <Text
+              testID="crash-countdown-text"
+              style={[type.instrument, { color: colors.dark.sos, marginTop: 4, fontFamily: fonts.mono }]}
+            >
+              {crashCountdown}s
+            </Text>
+            <View style={styles.crashBtnRow}>
+              <TouchableOpacity
+                onPress={dismissCrash}
+                style={[styles.crashBtn, styles.crashBtnGhost]}
+                testID="crash-dismiss-btn"
+              >
+                <Text style={[type.body, { color: colors.dark.ink }]}>I'M FINE</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={confirmCrashSos}
+                style={[styles.crashBtn, styles.crashBtnSos]}
+                testID="crash-send-now-btn"
+              >
+                <Text style={[type.body, { color: '#FFFFFF' }]}>SEND SOS NOW</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      )}
     </View>
   );
 }
@@ -711,4 +793,43 @@ const styles = StyleSheet.create({
   convoyRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: space.sm, borderBottomWidth: 1, borderBottomColor: colors.dark.rule },
   statusDot: { width: 8, height: 8, borderRadius: 4 },
   sosWrap: { padding: space.lg, paddingTop: space.sm, borderTopWidth: 1, borderTopColor: colors.dark.rule },
+  // Manual WS retry pill — visible only on `failed` state, sits under the
+  // status eyebrow so the rider sees it without scrolling.
+  retryPill: {
+    flexDirection: 'row', alignItems: 'center',
+    marginTop: 4, paddingHorizontal: 8, paddingVertical: 3,
+    borderWidth: 1, borderColor: colors.dark.amber, borderRadius: 2,
+  },
+  // Crash-detection countdown overlay. Full-screen semi-opaque scrim with a
+  // centred dark card. zIndex high enough to clear the SOS button.
+  crashOverlay: {
+    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.85)',
+    alignItems: 'center', justifyContent: 'center',
+    paddingHorizontal: space.lg,
+    zIndex: 100, elevation: 100,
+  },
+  crashCard: {
+    width: '100%', maxWidth: 360,
+    padding: space.xl,
+    borderWidth: 1, borderColor: colors.dark.sos,
+    backgroundColor: colors.dark.bg,
+    borderRadius: 4,
+    alignItems: 'flex-start',
+  },
+  crashBtnRow: {
+    flexDirection: 'row', gap: space.md, marginTop: space.xl, width: '100%',
+  },
+  crashBtn: {
+    flex: 1, paddingVertical: space.md,
+    alignItems: 'center', justifyContent: 'center',
+    borderRadius: 2,
+  },
+  crashBtnGhost: {
+    borderWidth: 1, borderColor: colors.dark.rule,
+    backgroundColor: 'transparent',
+  },
+  crashBtnSos: {
+    backgroundColor: colors.dark.sos,
+  },
 });

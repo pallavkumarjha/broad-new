@@ -54,6 +54,17 @@ function buildHtml(points: Pt[], dark: boolean, routeCoords?: [number, number][]
     .pin.stale{filter:grayscale(0.85);opacity:0.55;}
     @keyframes sos{0%{box-shadow:0 0 0 0 ${sosColor}aa;}70%{box-shadow:0 0 0 16px ${sosColor}00;}100%{box-shadow:0 0 0 0 ${sosColor}00;}}
     .name-tag{font-family:'JetBrains Mono', monospace;font-size:9px;color:${ink};background:${bg}cc;padding:1px 4px;border:1px solid ${ink}33;border-radius:2px;white-space:nowrap;transform:translate(10px,-8px);pointer-events:none;}
+    /* Heading chevron — small triangle that orbits the pin and rotates to
+       point in the rider's travel direction. Positioned absolutely against
+       the marker wrapper so the chevron rotates without affecting the dot. */
+    .marker-wrap{position:relative;width:30px;height:30px;display:flex;align-items:center;justify-content:center;}
+    .chevron{position:absolute;top:0;left:50%;width:0;height:0;
+      border-left:5px solid transparent;border-right:5px solid transparent;
+      border-bottom:8px solid ${route};
+      transform-origin:5px 23px;transform:translateX(-5px) rotate(0deg);
+      filter:drop-shadow(0 0 1px ${bg});pointer-events:none;}
+    .chevron.sos{border-bottom-color:${sosColor};}
+    .pin.stale + .chevron, .marker-wrap.stale .chevron{opacity:0.55;}
   </style></head>
   <body><div id="m"></div>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -97,11 +108,18 @@ function buildHtml(points: Pt[], dark: boolean, routeCoords?: [number, number][]
     function buildIcon(m) {
       const heading = (m.heading_deg ?? 0) | 0;
       const label = m.name ? '<span class="name-tag">'+escapeHtml(m.name)+'</span>' : '';
-      // The pin itself doesn't rotate — rotating a circle is invisible. We
-      // keep heading available for a future arrow/chevron icon; today it's a
-      // no-op visual but the data flows through end-to-end.
-      const html = '<div class="'+classFor(m)+'" data-heading="'+heading+'"></div>'+label;
-      return L.divIcon({ className:'', html, iconSize:[18,18], iconAnchor:[9,9] });
+      // We wrap the pin in a square so the chevron can be positioned around
+      // it and rotated to indicate direction of travel without rotating the
+      // pin itself (rotating a circle is invisible). Chevron is hidden when
+      // we don't have a meaningful heading (heading=0 with no movement).
+      const showChevron = heading !== 0 || m.isSelf;
+      const chevronCls = 'chevron' + (m.isSOS ? ' sos' : '');
+      const chevron = showChevron
+        ? '<div class="'+chevronCls+'" style="transform:translateX(-5px) rotate('+heading+'deg);"></div>'
+        : '';
+      const wrapCls = 'marker-wrap' + (m.stale ? ' stale' : '');
+      const html = '<div class="'+wrapCls+'">'+chevron+'<div class="'+classFor(m)+'"></div></div>'+label;
+      return L.divIcon({ className:'', html, iconSize:[30,30], iconAnchor:[15,15] });
     }
 
     function escapeHtml(s) {

@@ -96,6 +96,11 @@ export function useConvoySocket(
 ) {
   const [members, setMembers] = useState<ConvoyMember[]>([]);
   const [state, setState] = useState<SocketState>({ kind: 'idle' });
+  // Bumping `retryNonce` re-runs the connection effect from scratch — used by
+  // the public `retry()` helper to reset the backoff after a terminal failure.
+  // Auto-retry alone can't recover from `failed` (auth/permission close codes
+  // are intentionally one-shot), so the rider needs an explicit way back in.
+  const [retryNonce, setRetryNonce] = useState(0);
   const wsRef = useRef<WebSocket | null>(null);
   const onTripEndedRef = useRef(opts?.onTripEnded);
   const onSosRef = useRef(opts?.onSos);
@@ -198,7 +203,15 @@ export function useConvoySocket(
         } catch {}
       }
     };
-  }, [tripId]);
+  }, [tripId, retryNonce]);
+
+  /** Force a reconnect attempt. Resets the backoff counter and re-runs the
+   * connection effect. Safe to call from any state — when `connected` it
+   * just rebuilds the socket; when `failed` it's the only way out. */
+  const retry = useCallback(() => {
+    setState({ kind: 'connecting' });
+    setRetryNonce((n) => n + 1);
+  }, []);
 
   /** Send a pos update if the socket is open. No-op otherwise — the next
    * tick after reconnect will deliver the freshest sample. */
@@ -213,5 +226,5 @@ export function useConvoySocket(
     }
   }, []);
 
-  return { members, state, sendPos };
+  return { members, state, sendPos, retry };
 }
