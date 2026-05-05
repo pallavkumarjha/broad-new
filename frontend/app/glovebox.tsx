@@ -285,11 +285,28 @@ export default function Glovebox() {
       const name  = asset.fileName || `document.${ext}`;
 
       let finalUri = asset.uri;
-      if (Platform.OS !== 'web') finalUri = await persistFile(asset.uri, docKey, ext);
+      if (Platform.OS !== 'web') {
+        try {
+          finalUri = await persistFile(asset.uri, docKey, ext);
+        } catch (persistErr: any) {
+          // persistFile is the most common failure point on Android: legacy
+          // FileSystem APIs fail when the dev client APK was built against an
+          // older expo-file-system version than the JS bundle expects. Surface
+          // the real error so the rebuild requirement is obvious.
+          Alert.alert(
+            'Could not save image',
+            `File copy failed.\n\n${persistErr?.message || String(persistErr)}\n\n` +
+            'If this happens consistently, the native build is out of sync with the JS bundle — rebuild the dev client APK.',
+          );
+          return;
+        }
+      }
 
       setDraftAttach({ uri: finalUri, kind: 'image', name });
-    } catch (e) {
-      Alert.alert('Could not attach image', String(e));
+    } catch (e: any) {
+      // Surface the underlying error message (e.message) rather than the bare
+      // toString so the user can paste a useful clue back to us.
+      Alert.alert('Could not attach image', e?.message || String(e));
     }
   };
 
@@ -303,11 +320,22 @@ export default function Glovebox() {
 
       const asset = result.assets[0];
       let finalUri = asset.uri;
-      if (Platform.OS !== 'web') finalUri = await persistFile(asset.uri, docKey, 'pdf');
+      if (Platform.OS !== 'web') {
+        try {
+          finalUri = await persistFile(asset.uri, docKey, 'pdf');
+        } catch (persistErr: any) {
+          Alert.alert(
+            'Could not save PDF',
+            `File copy failed.\n\n${persistErr?.message || String(persistErr)}\n\n` +
+            'If this happens consistently, the native build is out of sync with the JS bundle — rebuild the dev client APK.',
+          );
+          return;
+        }
+      }
 
       setDraftAttach({ uri: finalUri, kind: 'pdf', name: asset.name });
-    } catch (e) {
-      Alert.alert('Could not attach PDF', String(e));
+    } catch (e: any) {
+      Alert.alert('Could not attach PDF', e?.message || String(e));
     }
   };
 
