@@ -3,6 +3,8 @@ import { View, Text, StyleSheet, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../src/contexts/AuthContext';
+import { storage } from '../src/lib/api';
+import { WELCOME_SEEN_KEY } from './welcome';
 import { colors, type, space } from '../src/theme/tokens';
 
 export default function Splash() {
@@ -11,9 +13,25 @@ export default function Splash() {
 
   useEffect(() => {
     if (loading) return;
-    const t = setTimeout(() => {
-      if (user) router.replace('/(tabs)');
-      else router.replace('/(auth)/login');
+    // 600ms hold so the brand mark gets a beat before we route. Long enough
+    // to register, short enough to not feel artificial.
+    const t = setTimeout(async () => {
+      if (user) {
+        router.replace('/(tabs)');
+        return;
+      }
+      // Logged out → welcome carousel on first ever launch, login screen for
+      // returning users (carousel sets the WELCOME_SEEN_KEY flag once seen).
+      let seen = false;
+      try {
+        seen = (await storage.getItem(WELCOME_SEEN_KEY)) === '1';
+      } catch {
+        // Storage unavailable (web fallback failure, etc.) — treat as seen
+        // so we don't strand the user in an infinite carousel loop on every
+        // launch. Better to skip a story than to block the auth screen.
+        seen = true;
+      }
+      router.replace(seen ? '/(auth)/login' : '/welcome');
     }, 600);
     return () => clearTimeout(t);
   }, [user, loading, router]);

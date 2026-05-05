@@ -21,7 +21,11 @@ export default function Register() {
     setErr(''); setBusy(true);
     try {
       await signUp(email.trim(), password, name.trim() || 'Rider');
-      router.replace('/onboarding/permissions');
+      // First post-register screen is the rider-type pick. Permissions used to
+      // be the very first thing we asked for — riders denied them ~half the
+      // time because there was zero context. Now permissions come last, after
+      // the user is invested in the flow.
+      router.replace('/onboarding/rider-type');
     } catch (e: any) {
       setErr(e.message || 'Registration failed');
     } finally { setBusy(false); }
