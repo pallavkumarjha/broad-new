@@ -604,7 +604,20 @@ export default function LiveRide() {
   // showing zero on a trip the rider clearly rode.
   const distanceCovered = (distanceM > 0 ? distanceM / 1000 : trip.distance_km * progress).toFixed(1);
 
+  // Only the organiser can end (PATCH status=completed on the trip). Until
+  // this gating landed the END button was rendered for everyone, so crew
+  // members tapping it got 403 from the backend with no clear UI message —
+  // looked like the app had hung. Now non-organisers see LEAVE instead.
+  const isOrganiser = !!currentUser?.id && trip?.user_id === currentUser.id;
+
   const endTrip = async () => {
+    if (!isOrganiser) {
+      // Defensive: this path shouldn't be reachable since the END button is
+      // gated to organisers, but if a future caller bypasses that we surface
+      // a clear message rather than hitting the backend's 403.
+      Alert.alert("Not allowed", "Only the organiser can end this ride. Use LEAVE to drop out.");
+      return;
+    }
     try {
       await api.patch(`/trips/${id}`, {
         status: 'completed',
@@ -625,6 +638,36 @@ export default function LiveRide() {
         e?.response?.data?.detail || e?.message || 'Network error. Try again.',
       );
     }
+  };
+
+  // Crew member version of "I'm done with this ride". Removes the rider from
+  // the trip's crew_ids and routes them home — the trip itself stays active
+  // for the remaining riders. Confirmation prompt to avoid a fat-finger drop
+  // mid-ride.
+  const leaveRide = () => {
+    Alert.alert(
+      'Leave this ride?',
+      'You will stop sharing location with the crew. The organiser will be notified.',
+      [
+        { text: 'Stay', style: 'cancel' },
+        {
+          text: 'Leave',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await api.post(`/trips/${id}/leave`);
+              await stopBackgroundTracking().catch(() => {});
+              router.replace('/(tabs)');
+            } catch (e: any) {
+              Alert.alert(
+                "Couldn't leave",
+                e?.response?.data?.detail || e?.message || 'Network error. Try again.',
+              );
+            }
+          },
+        },
+      ],
+    );
   };
 
   return (
@@ -654,7 +697,15 @@ export default function LiveRide() {
                 </TouchableOpacity>
               )}
             </View>
-            <TouchableOpacity onPress={endTrip} testID="ride-end-btn"><Meta style={{ color: colors.dark.amber }}>END</Meta></TouchableOpacity>
+            {isOrganiser ? (
+              <TouchableOpacity onPress={endTrip} testID="ride-end-btn">
+                <Meta style={{ color: colors.dark.amber }}>END</Meta>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity onPress={leaveRide} testID="ride-leave-btn">
+                <Meta style={{ color: colors.dark.amber }}>LEAVE</Meta>
+              </TouchableOpacity>
+            )}
           </View>
           {/* M2 — Ride progress hairline */}
           <View style={styles.progressTrack} testID="ride-progress-track">

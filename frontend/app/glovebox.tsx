@@ -265,14 +265,37 @@ export default function Glovebox() {
   const pickImage = async (docKey: DocKey, source: 'camera' | 'library') => {
     try {
       let result: ImagePicker.ImagePickerResult;
+      // expo-image-picker v15 introduced the new `MediaType[]` form ('images'),
+      // but the legacy `MediaTypeOptions.Images` enum is still accepted and is
+      // what older dev-client APKs were built against. Sticking with the enum
+      // here means a JS-bundle-only update never crashes a stale native build —
+      // both shapes work, the enum has wider compatibility.
+      const pickerOpts: ImagePicker.ImagePickerOptions = {
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.85,
+      };
       if (source === 'camera') {
         const perm = await ImagePicker.requestCameraPermissionsAsync();
         if (perm.status !== 'granted') { Alert.alert('Camera access denied', 'Enable camera in Settings.'); return; }
-        result = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.85, allowsEditing: false });
+        try {
+          result = await ImagePicker.launchCameraAsync(pickerOpts);
+        } catch (camErr: any) {
+          // Native rejection from `ExponentImagePicker.launchCameraAsync` —
+          // typical causes: device has no camera (emulator), camera intent
+          // crashed (Android), or the dev-client APK is older than the JS
+          // bundle's image-picker version. Give the user actionable steps
+          // rather than the raw bridge rejection.
+          Alert.alert(
+            'Camera failed',
+            `${camErr?.message || String(camErr)}\n\n` +
+            "Try \"Choose from Library\" instead. If this keeps happening, the dev-client APK may be out of sync with the JS bundle — rebuild with `eas build --profile development`.",
+          );
+          return;
+        }
       } else {
         const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
         if (perm.status !== 'granted') { Alert.alert('Photo library access denied', 'Enable in Settings.'); return; }
-        result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.85, allowsEditing: false });
+        result = await ImagePicker.launchImageLibraryAsync(pickerOpts);
       }
       if (result.canceled || !result.assets?.length) return;
 
