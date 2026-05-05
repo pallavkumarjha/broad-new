@@ -3,6 +3,8 @@ import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 import { api, storage, TOKEN_KEY, REFRESH_TOKEN_KEY, describeError } from '../lib/api';
 
+export type RiderType = 'solo' | 'crew' | 'commuter' | 'mixed';
+
 export type User = {
   id: string;
   email: string;
@@ -11,6 +13,7 @@ export type User = {
   emergency_contacts: { name: string; phone: string; relation?: string }[];
   stats: { total_km: number; trips_completed: number; highest_point_m: number };
   home_city?: string | null;
+  rider_type?: RiderType | null;
   created_at: string;
 };
 

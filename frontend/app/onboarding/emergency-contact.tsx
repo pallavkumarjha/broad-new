@@ -49,7 +49,13 @@ export default function EmergencyContact() {
       });
       await refresh();
       queryClient.invalidateQueries({ queryKey: ['auth', 'me'] });
-      router.replace('/(tabs)');
+      // Permissions used to be the very first thing the app asked for, with
+      // zero context for why. Moving it to the last step means the user has
+      // already invested 4 steps + emergency contact info before we touch
+      // location / notifications / crash detection — denial rate drops
+      // dramatically when permissions are framed against concrete features
+      // the user just signed up for.
+      router.replace('/onboarding/permissions');
     } catch (e: any) {
       Alert.alert('Could not save', e?.response?.data?.detail || e?.message || '');
     } finally {
@@ -68,10 +74,11 @@ export default function EmergencyContact() {
       });
       await refresh();
       queryClient.invalidateQueries({ queryKey: ['auth', 'me'] });
-      router.replace('/(tabs)');
+      router.replace('/onboarding/permissions');
     } catch (e: any) {
-      // If save fails, still let user continue
-      router.replace('/(tabs)');
+      // If save fails, still let user continue to permissions — onboarding
+      // shouldn't dead-end on a network blip.
+      router.replace('/onboarding/permissions');
     } finally {
       setBusy(false);
     }
@@ -84,10 +91,10 @@ export default function EmergencyContact() {
       </View>
       
       <View style={styles.header}>
-        <Eyebrow>STEP 3 OF 3</Eyebrow>
+        <Eyebrow>STEP 4 OF 4</Eyebrow>
         <Text style={[type.h1, { color: colors.light.ink, marginTop: space.xs }]}>Safety net.</Text>
         <Text style={[type.body, { color: colors.light.inkMuted, marginTop: space.xs }]}>
-          Who should we call if the road bites back? Add one or more emergency contacts.
+          Triggered automatically on SOS — they get your live location and a one-tap call back. Add at least one.
         </Text>
       </View>
       

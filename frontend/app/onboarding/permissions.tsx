@@ -58,7 +58,9 @@ export default function Permissions() {
     setCrash('granted');
   };
 
-  const done = () => router.push('/onboarding/rider-name');
+  // Permissions is now the LAST onboarding step (was first). On done we drop
+  // the user into the tabs — there's nothing left to set up.
+  const done = () => router.replace('/(tabs)');
 
   const grantedCount = [loc, notif, crash].filter(s => s === 'granted').length;
 
@@ -97,10 +99,10 @@ export default function Permissions() {
           <CompassIllus width={width} height={180} />
         </View>
         <View style={styles.header}>
-          <Eyebrow>THREE CHECKS BEFORE THE RIDE — {grantedCount}/3 READY</Eyebrow>
-          <Text style={[type.h1, { color: colors.light.ink, marginTop: space.xs }]}>The safety kit.</Text>
+          <Eyebrow>FINAL STEP — {grantedCount}/3 READY</Eyebrow>
+          <Text style={[type.h1, { color: colors.light.ink, marginTop: space.xs }]}>One last thing.</Text>
           <Text style={[type.body, { color: colors.light.inkMuted, marginTop: space.xs }]}>
-            Broad works best when it can see your location, send alerts, and feel the road. Each is optional — you can turn any of these off later.
+            Three permissions wire up the features you just set up. Each is optional — toggle any of them off later from Settings.
           </Text>
           <View style={styles.progressTrack} testID="perm-progress-track">
             {[0, 1, 2].map((i) => (
@@ -119,8 +121,8 @@ export default function Permissions() {
         <View style={styles.list}>
           <Item
             icon="map-pin"
-            title="Location — for Live Ride"
-            desc="So the map knows where you are and your crew can see your position on the convoy."
+            title="Location — so your crew sees you"
+            desc="Show your dot on the convoy map during a ride. Share live position with friends back home."
             status={loc}
             onAsk={requestLoc}
             testID="perm-location-ask"
@@ -128,15 +130,15 @@ export default function Permissions() {
           <Item
             icon="bell"
             title="Notifications — for SOS and invites"
-            desc="So you hear about crew SOS pings, ride invites, and trip reminders."
+            desc="If a crewmate hits SOS you'll hear about it in seconds. Also: ride invites, request approvals, trip-start nudges."
             status={notif}
             onAsk={requestNotif}
             testID="perm-notif-ask"
           />
           <Item
             icon="activity"
-            title="Crash detection"
-            desc="Uses the accelerometer to trigger an SOS if the bike takes a hard hit. Off by default — enable in Settings."
+            title="Crash detection — optional"
+            desc="Uses the accelerometer to fire SOS if the bike takes a hard hit. Off by default — turn on now or later from Settings."
             status={crash}
             onAsk={requestCrash}
             testID="perm-crash-ask"
@@ -145,9 +147,9 @@ export default function Permissions() {
       </ScrollView>
 
       <View style={styles.cta}>
-        <Button label="CONTINUE" onPress={done} testID="perm-continue-btn" />
+        <Button label="START RIDING →" onPress={done} testID="perm-continue-btn" />
         <TouchableOpacity onPress={done} style={{ alignItems: 'center', marginTop: space.md }} testID="perm-skip-btn">
-          <Meta>SKIP FOR NOW</Meta>
+          <Meta>SKIP — I'LL ENABLE THESE LATER</Meta>
         </TouchableOpacity>
       </View>
     </SafeAreaView>

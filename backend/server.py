@@ -166,6 +166,11 @@ class UserPublic(BaseModel):
     emergency_contacts: List[EmergencyContact] = Field(default_factory=list)
     stats: UserStats = Field(default_factory=UserStats)
     home_city: Optional[str] = None  # e.g. "Bangalore", "Manali" — filters Discover trips
+    # Self-identified rider archetype, captured in onboarding step 1.
+    # Used by Discover/Home to tune defaults (commuter sees city rides,
+    # solo sees touring). Optional — old users have nothing set; UI falls
+    # back to a generic feed.
+    rider_type: Optional[Literal["solo", "crew", "commuter", "mixed"]] = None
     created_at: str
 
 
@@ -195,6 +200,7 @@ class UpdateUserIn(BaseModel):
     bike: Optional[Bike] = None
     emergency_contacts: Optional[List[EmergencyContact]] = None
     home_city: Optional[str] = None
+    rider_type: Optional[Literal["solo", "crew", "commuter", "mixed"]] = None
 
 
 class Waypoint(BaseModel):
@@ -340,6 +346,7 @@ def to_public(u: dict) -> UserPublic:
         emergency_contacts=[EmergencyContact(**c) for c in (u.get("emergency_contacts") or [])],
         stats=UserStats(**(u.get("stats") or {})),
         home_city=u.get("home_city"),
+        rider_type=u.get("rider_type"),
         created_at=u.get("created_at", now_iso()),
     )
 
@@ -452,6 +459,8 @@ async def update_me(body: UpdateUserIn, user: dict = Depends(get_current_user)):
         update["emergency_contacts"] = [c.dict() for c in body.emergency_contacts]
     if "home_city" in sent:
         update["home_city"] = body.home_city.strip() if body.home_city else None
+    if "rider_type" in sent:
+        update["rider_type"] = body.rider_type
     if update:
         await db.users.update_one({"id": user["id"]}, {"$set": update})
     fresh = await db.users.find_one({"id": user["id"]}, {"_id": 0, "password_hash": 0})

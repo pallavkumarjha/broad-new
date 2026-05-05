@@ -33,10 +33,10 @@ export default function RiderName() {
       </View>
       
       <View style={styles.header}>
-        <Eyebrow>STEP 1 OF 3</Eyebrow>
+        <Eyebrow>STEP 2 OF 4</Eyebrow>
         <Text style={[type.h1, { color: colors.light.ink, marginTop: space.xs }]}>Who's riding?</Text>
         <Text style={[type.body, { color: colors.light.inkMuted, marginTop: space.xs }]}>
-          Tell us your name — or what you want to be called on the road.
+          Your crew sees this name on the map and in invites. Use the one your friends know.
         </Text>
       </View>
       

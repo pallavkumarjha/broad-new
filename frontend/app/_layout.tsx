@@ -121,6 +121,11 @@ export default function RootLayout() {
             <Stack.Screen name="sos/safe/[id]" options={{ animation: 'fade' }} />
             {/* Edit trip — slides up like plan sheet */}
             <Stack.Screen name="trip/edit/[id]" options={{ animation: 'slide_from_bottom' }} />
+            {/* Welcome carousel — pre-auth, only seen on first ever launch.
+                Crossfade because there's no spatial relationship to the splash. */}
+            <Stack.Screen name="welcome" options={{ animation: 'fade' }} />
+            {/* Onboarding rider-type pick — first step post-register */}
+            <Stack.Screen name="onboarding/rider-type" options={{ animation: 'slide_from_right' }} />
             {/* Auth — crossfade, not directional */}
             <Stack.Screen name="(auth)" options={{ animation: 'fade' }} />
           </Stack>

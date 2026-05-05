@@ -51,10 +51,10 @@ export default function BikeInfo() {
       </View>
       
       <View style={styles.header}>
-        <Eyebrow>STEP 2 OF 3</Eyebrow>
+        <Eyebrow>STEP 3 OF 4</Eyebrow>
         <Text style={[type.h1, { color: colors.light.ink, marginTop: space.xs }]}>The bike.</Text>
         <Text style={[type.body, { color: colors.light.inkMuted, marginTop: space.xs }]}>
-          What are you riding? We'll keep track of the details for you.
+          What are you riding? Helps with crash recovery, fuel-stop estimates, and group pace matching.
         </Text>
       </View>
       
