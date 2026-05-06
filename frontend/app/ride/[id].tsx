@@ -16,7 +16,7 @@ import { useSettings } from '../../src/contexts/SettingsContext';
 import { useAuth } from '../../src/contexts/AuthContext';
 import { colors, type, space, fonts } from '../../src/theme/tokens';
 import { Eyebrow, Meta } from '../../src/components/ui';
-import { MapView, type LiveMarker } from '../../src/components/MapView';
+import { MapView, type LiveMarker, type FollowMode } from '../../src/components/MapView';
 import { SOSButton } from '../../src/components/SOSButton';
 
 /** Bearing between two lat/lng points in degrees (0 = north, clockwise). Used to
@@ -70,6 +70,16 @@ export default function LiveRide() {
   const [realPos, setRealPos] = useState<{ lat: number; lng: number } | null>(null);
   const [heading, setHeading] = useState(0);
   const [accuracyM, setAccuracyM] = useState<number | null>(null);
+  // Camera follow strategy. Defaults to 'self' so a fresh ride centres on
+  // the rider's own dot. Auto-flips to 'free' if the rider drags the map
+  // (handled inside the WebView, surfaced via `onFollowModeChange`).
+  const [followMode, setFollowMode] = useState<FollowMode>('self');
+  // Pan-to-marker target. We bump a nonce-style state pair each time a
+  // pan request arrives so MapView fires its `panToMarkerId` effect even
+  // when the rider taps the same row twice in a row. The id is what the
+  // map looks up; the nonce is what useEffect actually compares.
+  const [panToId, setPanToId] = useState<string | null>(null);
+  const panNonceRef = useRef(0);
   // Re-render once a second so stale-marker computation (based on
   // updated_at vs Date.now()) actually picks up missing ticks even when
   // no fresh WS message has arrived to trigger a render.
@@ -572,6 +582,10 @@ export default function LiveRide() {
       lng: realPos.lng,
       heading_deg: heading,
       name: currentUser?.name || 'You',
+      // speed/updated_at flow into the WebView popup so a tap on self shows
+      // the same telemetry as the speedometer + a "now" timestamp.
+      speed_kmh: speed,
+      updated_at: new Date().toISOString(),
       isSelf: true,
     });
   }
@@ -588,6 +602,8 @@ export default function LiveRide() {
       lng: m.lng,
       heading_deg: m.heading_deg ?? 0,
       name: m.name,
+      speed_kmh: m.speed_kmh ?? 0,
+      updated_at: m.updated_at,
       stale,
     });
   }
@@ -728,7 +744,49 @@ export default function LiveRide() {
               `routeCoords` is the OSRM road-following polyline; falls back to
               straight-line waypoint connections when not yet loaded. */}
           <View style={{ alignItems: 'center', paddingTop: space.sm }}>
-            <MapView points={allPoints} dark width={screenWidth} height={300} markers={markers} routeCoords={routeCoords} />
+            <View style={{ width: screenWidth, height: 300 }}>
+              <MapView
+                points={allPoints}
+                dark
+                width={screenWidth}
+                height={300}
+                markers={markers}
+                routeCoords={routeCoords}
+                followMode={followMode}
+                panToMarkerId={panToId}
+                onMarkerPress={() => { /* Leaflet handles popup in-WebView; nothing else to do here */ }}
+                onFollowModeChange={(mode) => setFollowMode(mode)}
+              />
+              {/* Follow-mode pill — overlaid top-right of the map. Cycles
+                  self → centroid → free → self each tap. The pill mirrors
+                  the WebView's internal state, including the auto-flip to
+                  free that fires when the rider drags the map. */}
+              <TouchableOpacity
+                testID="ride-follow-mode-btn"
+                onPress={() => {
+                  const next: FollowMode =
+                    followMode === 'self' ? 'centroid' :
+                    followMode === 'centroid' ? 'free' : 'self';
+                  setFollowMode(next);
+                }}
+                style={styles.followPill}
+                activeOpacity={0.85}
+              >
+                <Feather
+                  name={followMode === 'self' ? 'navigation' : followMode === 'centroid' ? 'users' : 'move'}
+                  size={12}
+                  color={followMode === 'free' ? colors.dark.inkMuted : colors.dark.amber}
+                />
+                <Meta
+                  style={{
+                    color: followMode === 'free' ? colors.dark.inkMuted : colors.dark.amber,
+                    marginLeft: 6,
+                  }}
+                >
+                  {followMode === 'self' ? 'FOLLOW · ME' : followMode === 'centroid' ? 'FOLLOW · CREW' : 'FREE PAN'}
+                </Meta>
+              </TouchableOpacity>
+            </View>
           </View>
 
           {/* Speedometer */}
@@ -765,15 +823,35 @@ export default function LiveRide() {
               const hasFix = m.lat != null && m.lng != null;
               const status = !hasFix ? 'NO FIX' : stale ? 'STALE' : 'LIVE';
               const dotColor = !hasFix || stale ? colors.dark.inkMuted : colors.dark.safe;
+              const canPan = hasFix;
               return (
-                <View key={m.user_id} style={styles.convoyRow}>
+                <TouchableOpacity
+                  key={m.user_id}
+                  testID={`convoy-row-${m.user_id}`}
+                  style={[styles.convoyRow, !canPan && { opacity: 0.55 }]}
+                  activeOpacity={canPan ? 0.6 : 1}
+                  disabled={!canPan}
+                  onPress={() => {
+                    // Tap row → fly map to that rider, open their popup.
+                    // Switch follow off so the camera stays parked on them
+                    // for a beat instead of snapping back to self next tick.
+                    if (followMode !== 'free') setFollowMode('free');
+                    panNonceRef.current += 1;
+                    // Append a nonce so the same id tapped twice still
+                    // re-fires the panToMarkerId effect inside MapView.
+                    setPanToId(`${m.user_id}#${panNonceRef.current}`);
+                  }}
+                >
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                     <View style={[styles.statusDot, { backgroundColor: dotColor }]} />
                     <Text style={[type.body, { color: colors.dark.ink }]}>{m.name}</Text>
                     <Meta style={{ color: colors.dark.inkMuted }}>· {status}</Meta>
                   </View>
-                  <Meta style={{ color: colors.dark.ink }}>{Math.round(m.speed_kmh || 0)} KM/H</Meta>
-                </View>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <Meta style={{ color: colors.dark.ink }}>{Math.round(m.speed_kmh || 0)} KM/H</Meta>
+                    {canPan && <Feather name="map-pin" size={12} color={colors.dark.inkMuted} />}
+                  </View>
+                </TouchableOpacity>
               );
             })}
             {convoyMembers.filter((m: any) => m.user_id !== myId).length === 0 && (
@@ -850,6 +928,16 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center',
     marginTop: 4, paddingHorizontal: 8, paddingVertical: 3,
     borderWidth: 1, borderColor: colors.dark.amber, borderRadius: 2,
+  },
+  // Follow-mode pill — overlaid top-right of the map. Border colour mirrors
+  // text colour (amber when locked, muted when free) so the affordance
+  // is readable against the dark Carto basemap.
+  followPill: {
+    position: 'absolute', top: 12, right: 12,
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 10, paddingVertical: 5,
+    backgroundColor: colors.dark.bg + 'cc',
+    borderWidth: 1, borderColor: colors.dark.rule, borderRadius: 2,
   },
   // Crash-detection countdown overlay. Full-screen semi-opaque scrim with a
   // centred dark card. zIndex high enough to clear the SOS button.
