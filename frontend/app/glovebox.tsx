@@ -2,23 +2,26 @@ import React, { useState, useCallback } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   TextInput, Platform, Alert, KeyboardAvoidingView,
-  ActionSheetIOS, Linking,
 } from 'react-native';
-import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import * as LocalAuthentication from 'expo-local-authentication';
 import * as SecureStore from 'expo-secure-store';
-import * as ImagePicker from 'expo-image-picker';
-import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system/legacy';
 import { colors, type, space, radius, fonts } from '../src/theme/tokens';
 import { Eyebrow, Meta, Rule, Button } from '../src/components/ui';
 
 // ─────────────────────────────────────────────────────────
 // Storage keys
 // ─────────────────────────────────────────────────────────
+// Note: an earlier version of this screen also supported attaching photos
+// and PDFs and persisted them under broad_glovebox_<doc>_attach_v1 plus a
+// glovebox/ subdirectory in documentDirectory. The attachment pipeline was
+// brittle on Android (legacy expo-file-system kept tripping over dev-client
+// version drift), and the value vs maintenance cost wasn't there — the screen
+// is now text-only. Existing attachment SecureStore entries and on-disk files
+// from older app versions are intentionally left in place so a downgrade
+// would still find them; they consume a few KB each and aren't read here.
 const KEYS = {
   rc:        'broad_glovebox_rc_v1',
   insurance: 'broad_glovebox_insurance_v1',
@@ -26,23 +29,7 @@ const KEYS = {
   medical:   'broad_glovebox_medical_v1',
 } as const;
 
-const ATTACH_KEYS = {
-  rc:        'broad_glovebox_rc_attach_v1',
-  insurance: 'broad_glovebox_insurance_attach_v1',
-  dl:        'broad_glovebox_dl_attach_v1',
-  medical:   'broad_glovebox_medical_attach_v1',
-} as const;
-
 type DocKey = keyof typeof KEYS;
-
-// ─────────────────────────────────────────────────────────
-// Attachment type
-// ─────────────────────────────────────────────────────────
-type Attachment = {
-  uri:  string;               // persisted local URI (native) or base64 data URI (web)
-  kind: 'image' | 'pdf';
-  name: string;
-};
 
 // ─────────────────────────────────────────────────────────
 // Document text schemas
@@ -53,7 +40,6 @@ type DLDoc        = { dl_number: string; valid_until: string; vehicle_class: str
 type MedicalDoc   = { blood_group: string; allergies: string; conditions: string; notes: string };
 
 type AllDocs = { rc: RCDoc; insurance: InsuranceDoc; dl: DLDoc; medical: MedicalDoc };
-type AllAttachments = { rc: Attachment | null; insurance: Attachment | null; dl: Attachment | null; medical: Attachment | null };
 
 const EMPTY_DOCS: AllDocs = {
   rc:        { reg_number: '', chassis: '', engine: '', owner: '', valid_until: '', notes: '' },
@@ -61,7 +47,6 @@ const EMPTY_DOCS: AllDocs = {
   dl:        { dl_number: '', valid_until: '', vehicle_class: '', notes: '' },
   medical:   { blood_group: '', allergies: '', conditions: '', notes: '' },
 };
-const EMPTY_ATTACHMENTS: AllAttachments = { rc: null, insurance: null, dl: null, medical: null };
 
 // ─────────────────────────────────────────────────────────
 // Field definitions
@@ -114,38 +99,6 @@ async function secureSet(key: string, value: string): Promise<void> {
   if (Platform.OS === 'web') { try { localStorage.setItem(key, value); } catch {} return; }
   return SecureStore.setItemAsync(key, value);
 }
-async function secureDel(key: string): Promise<void> {
-  if (Platform.OS === 'web') { try { localStorage.removeItem(key); } catch {} return; }
-  return SecureStore.deleteItemAsync(key);
-}
-
-// ─────────────────────────────────────────────────────────
-// File helpers  (expo-file-system v19 legacy async API)
-// ─────────────────────────────────────────────────────────
-function gloveboxDirUri(): string {
-  return (FileSystem.documentDirectory ?? '') + 'glovebox/';
-}
-
-async function persistFile(sourceUri: string, docKey: DocKey, ext: string): Promise<string> {
-  const dir  = gloveboxDirUri();
-  await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
-  const dest = dir + `${docKey}_attachment.${ext}`;
-  const info = await FileSystem.getInfoAsync(dest);
-  if (info.exists) await FileSystem.deleteAsync(dest, { idempotent: true });
-  await FileSystem.copyAsync({ from: sourceUri, to: dest });
-  return dest;
-}
-
-async function deletePersistedFile(docKey: DocKey): Promise<void> {
-  const dir = gloveboxDirUri();
-  for (const ext of ['jpg', 'jpeg', 'png', 'pdf', 'webp']) {
-    try {
-      const dest = dir + `${docKey}_attachment.${ext}`;
-      const info = await FileSystem.getInfoAsync(dest);
-      if (info.exists) await FileSystem.deleteAsync(dest, { idempotent: true });
-    } catch {}
-  }
-}
 
 // ─────────────────────────────────────────────────────────
 // Main screen
@@ -155,13 +108,11 @@ type ScreenState = 'locked' | 'unlocking' | 'unlocked';
 export default function Glovebox() {
   const router = useRouter();
 
-  const [screen, setScreen]           = useState<ScreenState>('locked');
-  const [docs, setDocs]               = useState<AllDocs>(EMPTY_DOCS);
-  const [attachments, setAttachments] = useState<AllAttachments>(EMPTY_ATTACHMENTS);
-  const [editing, setEditing]         = useState<DocKey | null>(null);
-  const [draft, setDraft]             = useState<Record<string, string>>({});
-  const [draftAttach, setDraftAttach] = useState<Attachment | null | 'delete'>(null); // null=unchanged, 'delete'=remove
-  const [saving, setSaving]           = useState(false);
+  const [screen, setScreen] = useState<ScreenState>('locked');
+  const [docs, setDocs]     = useState<AllDocs>(EMPTY_DOCS);
+  const [editing, setEditing] = useState<DocKey | null>(null);
+  const [draft, setDraft]     = useState<Record<string, string>>({});
+  const [saving, setSaving]   = useState(false);
   const [biometricLabel, setBiometricLabel] = useState('Face ID / Fingerprint');
 
   // Re-lock on every navigation away
@@ -170,7 +121,6 @@ export default function Glovebox() {
       setScreen('locked');
       setEditing(null);
       setDocs(EMPTY_DOCS);
-      setAttachments(EMPTY_ATTACHMENTS);
       if (Platform.OS !== 'web') {
         LocalAuthentication.supportedAuthenticationTypesAsync().then(types => {
           if (types.includes(LocalAuthentication.AuthenticationType.FACIAL_RECOGNITION)) setBiometricLabel('Face ID');
@@ -211,185 +161,37 @@ export default function Glovebox() {
     }
   };
 
-  const lock = () => { setScreen('locked'); setEditing(null); setDocs(EMPTY_DOCS); setAttachments(EMPTY_ATTACHMENTS); };
+  const lock = () => { setScreen('locked'); setEditing(null); setDocs(EMPTY_DOCS); };
 
   // ── Load from storage ──────────────────────────────────
   const loadAll = async () => {
     const d = { ...EMPTY_DOCS };
-    const a = { ...EMPTY_ATTACHMENTS };
     for (const k of Object.keys(KEYS) as DocKey[]) {
-      try { const raw = await secureGet(KEYS[k]);        if (raw) (d as any)[k] = JSON.parse(raw); } catch {}
-      try { const raw = await secureGet(ATTACH_KEYS[k]); if (raw) (a as any)[k] = JSON.parse(raw); } catch {}
+      try { const raw = await secureGet(KEYS[k]); if (raw) (d as any)[k] = JSON.parse(raw); } catch {}
     }
     setDocs(d);
-    setAttachments(a);
   };
 
   // ── Edit helpers ───────────────────────────────────────
   const startEdit = (key: DocKey) => {
     setDraft({ ...(docs[key] as any) });
-    setDraftAttach(null);     // null = no change yet
     setEditing(key);
   };
 
-  const cancelEdit = () => { setEditing(null); setDraft({}); setDraftAttach(null); };
+  const cancelEdit = () => { setEditing(null); setDraft({}); };
 
   const saveDoc = async (docKey: DocKey) => {
     setSaving(true);
     try {
-      // Save text fields
       const updated = { ...docs[docKey], ...draft } as any;
       await secureSet(KEYS[docKey], JSON.stringify(updated));
       setDocs(prev => ({ ...prev, [docKey]: updated }));
-
-      // Handle attachment
-      if (draftAttach === 'delete') {
-        if (Platform.OS !== 'web') await deletePersistedFile(docKey);
-        await secureDel(ATTACH_KEYS[docKey]);
-        setAttachments(prev => ({ ...prev, [docKey]: null }));
-      } else if (draftAttach !== null) {
-        await secureSet(ATTACH_KEYS[docKey], JSON.stringify(draftAttach));
-        setAttachments(prev => ({ ...prev, [docKey]: draftAttach }));
-      }
-
       setEditing(null);
-      setDraftAttach(null);
     } catch {
       Alert.alert('Save failed', 'Could not write to device storage.');
     } finally {
       setSaving(false);
     }
-  };
-
-  // ── Attachment picking ─────────────────────────────────
-  const pickImage = async (docKey: DocKey, source: 'camera' | 'library') => {
-    try {
-      let result: ImagePicker.ImagePickerResult;
-      // expo-image-picker v15 introduced the new `MediaType[]` form ('images'),
-      // but the legacy `MediaTypeOptions.Images` enum is still accepted and is
-      // what older dev-client APKs were built against. Sticking with the enum
-      // here means a JS-bundle-only update never crashes a stale native build —
-      // both shapes work, the enum has wider compatibility.
-      const pickerOpts: ImagePicker.ImagePickerOptions = {
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        quality: 0.85,
-      };
-      if (source === 'camera') {
-        const perm = await ImagePicker.requestCameraPermissionsAsync();
-        if (perm.status !== 'granted') { Alert.alert('Camera access denied', 'Enable camera in Settings.'); return; }
-        try {
-          result = await ImagePicker.launchCameraAsync(pickerOpts);
-        } catch (camErr: any) {
-          // Native rejection from `ExponentImagePicker.launchCameraAsync` —
-          // typical causes: device has no camera (emulator), camera intent
-          // crashed (Android), or the dev-client APK is older than the JS
-          // bundle's image-picker version. Give the user actionable steps
-          // rather than the raw bridge rejection.
-          Alert.alert(
-            'Camera failed',
-            `${camErr?.message || String(camErr)}\n\n` +
-            "Try \"Choose from Library\" instead. If this keeps happening, the dev-client APK may be out of sync with the JS bundle — rebuild with `eas build --profile development`.",
-          );
-          return;
-        }
-      } else {
-        const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-        if (perm.status !== 'granted') { Alert.alert('Photo library access denied', 'Enable in Settings.'); return; }
-        result = await ImagePicker.launchImageLibraryAsync(pickerOpts);
-      }
-      if (result.canceled || !result.assets?.length) return;
-
-      const asset = result.assets[0];
-      // Derive extension from mimeType first (most reliable), then URI, then default to jpg.
-      // asset.uri on Android can be a content:// URI with no extension in the path.
-      const ext = asset.mimeType
-        ? asset.mimeType.split('/')[1]?.replace('jpeg', 'jpg') || 'jpg'
-        : (asset.uri.split('.').pop()?.split('?')[0] || 'jpg').toLowerCase();
-      const name  = asset.fileName || `document.${ext}`;
-
-      let finalUri = asset.uri;
-      if (Platform.OS !== 'web') {
-        try {
-          finalUri = await persistFile(asset.uri, docKey, ext);
-        } catch (persistErr: any) {
-          // persistFile is the most common failure point on Android: legacy
-          // FileSystem APIs fail when the dev client APK was built against an
-          // older expo-file-system version than the JS bundle expects. Surface
-          // the real error so the rebuild requirement is obvious.
-          Alert.alert(
-            'Could not save image',
-            `File copy failed.\n\n${persistErr?.message || String(persistErr)}\n\n` +
-            'If this happens consistently, the native build is out of sync with the JS bundle — rebuild the dev client APK.',
-          );
-          return;
-        }
-      }
-
-      setDraftAttach({ uri: finalUri, kind: 'image', name });
-    } catch (e: any) {
-      // Surface the underlying error message (e.message) rather than the bare
-      // toString so the user can paste a useful clue back to us.
-      Alert.alert('Could not attach image', e?.message || String(e));
-    }
-  };
-
-  const pickPDF = async (docKey: DocKey) => {
-    try {
-      const result = await DocumentPicker.getDocumentAsync({
-        type: 'application/pdf',
-        copyToCacheDirectory: true,
-      });
-      if (result.canceled || !result.assets?.length) return;
-
-      const asset = result.assets[0];
-      let finalUri = asset.uri;
-      if (Platform.OS !== 'web') {
-        try {
-          finalUri = await persistFile(asset.uri, docKey, 'pdf');
-        } catch (persistErr: any) {
-          Alert.alert(
-            'Could not save PDF',
-            `File copy failed.\n\n${persistErr?.message || String(persistErr)}\n\n` +
-            'If this happens consistently, the native build is out of sync with the JS bundle — rebuild the dev client APK.',
-          );
-          return;
-        }
-      }
-
-      setDraftAttach({ uri: finalUri, kind: 'pdf', name: asset.name });
-    } catch (e: any) {
-      Alert.alert('Could not attach PDF', e?.message || String(e));
-    }
-  };
-
-  const promptAttach = (docKey: DocKey) => {
-    if (Platform.OS === 'ios') {
-      ActionSheetIOS.showActionSheetWithOptions(
-        { options: ['Cancel', 'Take Photo', 'Choose from Library', 'Attach PDF'], cancelButtonIndex: 0 },
-        (idx) => {
-          if (idx === 1) pickImage(docKey, 'camera');
-          if (idx === 2) pickImage(docKey, 'library');
-          if (idx === 3) pickPDF(docKey);
-        }
-      );
-    } else {
-      // Android / web: simple Alert menu
-      Alert.alert('Attach document', 'Choose a source', [
-        { text: 'Take Photo',          onPress: () => pickImage(docKey, 'camera')  },
-        { text: 'Choose from Library', onPress: () => pickImage(docKey, 'library') },
-        { text: 'Attach PDF',          onPress: () => pickPDF(docKey)              },
-        { text: 'Cancel', style: 'cancel' },
-      ]);
-    }
-  };
-
-  const openAttachment = (attach: Attachment) => {
-    if (attach.kind === 'pdf') {
-      Linking.openURL(attach.uri).catch(() =>
-        Alert.alert('Cannot open PDF', 'No PDF viewer found on this device.')
-      );
-    }
-    // images are shown inline — no external open needed
   };
 
   // ── Render: locked ────────────────────────────────────
@@ -422,9 +224,8 @@ export default function Glovebox() {
             <Eyebrow style={{ marginLeft: 8, color: colors.light.amber }}>STORED ON THIS DEVICE ONLY</Eyebrow>
           </View>
           <Text style={[type.body, { color: colors.light.ink, marginTop: space.sm, lineHeight: 22 }]}>
-            Your documents — including any photos or PDFs you attach — are saved on this device only,
-            protected by your device authentication.{'\n\n'}
-            Broad has <Text style={{ fontFamily: fonts.serifSemi }}>no access</Text> to these files.
+            Your documents are saved on this device only, protected by your device authentication.{'\n\n'}
+            Broad has <Text style={{ fontFamily: fonts.serifSemi }}>no access</Text> to these details.
             They are <Text style={{ fontFamily: fonts.serifSemi }}>not uploaded</Text> to any server
             and <Text style={{ fontFamily: fonts.serifSemi }}>not backed up</Text>. Uninstalling the
             app permanently deletes them.
@@ -458,10 +259,9 @@ export default function Glovebox() {
 
   // ── Render: doc card (unlocked list) ──────────────────
   const renderDocCard = (docKey: DocKey) => {
-    const meta   = DOC_META[docKey];
-    const doc    = (docs[docKey] as any);
-    const attach = attachments[docKey];
-    const empty  = Object.values(doc).every(v => !v);
+    const meta  = DOC_META[docKey];
+    const doc   = (docs[docKey] as any);
+    const empty = Object.values(doc).every(v => !v);
 
     return (
       <TouchableOpacity key={docKey} onPress={() => startEdit(docKey)} style={s.docCard} testID={`glovebox-${docKey}`}>
@@ -475,23 +275,8 @@ export default function Glovebox() {
               {meta.peek(doc).toUpperCase()}
             </Meta>
           </View>
-          <View style={{ alignItems: 'flex-end', gap: 4 }}>
-            {attach && (
-              <View style={s.attachBadge}>
-                <Feather name={attach.kind === 'image' ? 'image' : 'file-text'} size={10} color={colors.light.amber} />
-                <Meta style={{ marginLeft: 4, color: colors.light.amber }}>
-                  {attach.kind === 'image' ? 'PHOTO' : 'PDF'}
-                </Meta>
-              </View>
-            )}
-            <Feather name="edit-2" size={14} color={colors.light.inkMuted} />
-          </View>
+          <Feather name="edit-2" size={14} color={colors.light.inkMuted} />
         </View>
-
-        {/* Thumbnail strip if image attached */}
-        {attach?.kind === 'image' && (
-          <Image source={{ uri: attach.uri }} style={s.thumbStrip} contentFit="cover" />
-        )}
       </TouchableOpacity>
     );
   };
@@ -515,7 +300,7 @@ export default function Glovebox() {
         <View style={{ padding: space.lg }}>
           <Text style={[type.h1, { color: colors.light.ink }]}>Your documents.</Text>
           <Text style={[type.body, { color: colors.light.inkMuted, marginTop: space.xs }]}>
-            Stored on this device. Tap any card to edit or attach a photo / PDF.
+            Stored on this device. Tap any card to edit.
           </Text>
         </View>
         <Rule />
@@ -525,65 +310,6 @@ export default function Glovebox() {
       </ScrollView>
     </SafeAreaView>
   );
-
-  // ── Render: attachment section inside edit ─────────────
-  const renderAttachSection = (docKey: DocKey) => {
-    // What to show: draft change takes priority over saved
-    const saved   = attachments[docKey];
-    const current: Attachment | null = draftAttach === 'delete' ? null
-                                      : draftAttach             ? draftAttach
-                                      : saved;
-
-    return (
-      <View style={s.attachSection}>
-        <View style={[s.noticeRow, { marginBottom: space.sm }]}>
-          <Feather name="paperclip" size={12} color={colors.light.inkMuted} />
-          <Eyebrow style={{ marginLeft: 6 }}>ATTACHMENT</Eyebrow>
-        </View>
-
-        {current ? (
-          <>
-            {current.kind === 'image' ? (
-              <Image source={{ uri: current.uri }} style={s.attachPreview} contentFit="contain" />
-            ) : (
-              <TouchableOpacity style={s.pdfRow} onPress={() => openAttachment(current)}>
-                <Feather name="file-text" size={20} color={colors.light.amber} />
-                <View style={{ flex: 1, marginLeft: space.md }}>
-                  <Text style={[type.body, { color: colors.light.ink }]} numberOfLines={1}>{current.name}</Text>
-                  <Meta style={{ marginTop: 2 }}>PDF · TAP TO OPEN</Meta>
-                </View>
-                <Feather name="external-link" size={14} color={colors.light.inkMuted} />
-              </TouchableOpacity>
-            )}
-            <View style={s.attachActions}>
-              <TouchableOpacity style={s.attachAction} onPress={() => promptAttach(docKey)}>
-                <Feather name="refresh-cw" size={13} color={colors.light.ink} />
-                <Meta style={{ marginLeft: 6 }}>REPLACE</Meta>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[s.attachAction, { borderColor: colors.light.danger }]}
-                onPress={() => Alert.alert('Remove attachment?', 'This will delete the attached file.', [
-                  { text: 'Remove', style: 'destructive', onPress: () => setDraftAttach('delete') },
-                  { text: 'Keep', style: 'cancel' },
-                ])}
-              >
-                <Feather name="trash-2" size={13} color={colors.light.danger} />
-                <Meta style={{ marginLeft: 6, color: colors.light.danger }}>REMOVE</Meta>
-              </TouchableOpacity>
-            </View>
-          </>
-        ) : (
-          <TouchableOpacity style={s.attachEmpty} onPress={() => promptAttach(docKey)}>
-            <Feather name="plus" size={18} color={colors.light.inkMuted} />
-            <Text style={[type.body, { color: colors.light.inkMuted, marginTop: space.sm, textAlign: 'center' }]}>
-              Attach a photo or PDF
-            </Text>
-            <Meta style={{ marginTop: 4 }}>CAMERA · LIBRARY · PDF</Meta>
-          </TouchableOpacity>
-        )}
-      </View>
-    );
-  };
 
   // ── Render: edit view ─────────────────────────────────
   const renderEditing = (docKey: DocKey) => {
@@ -624,11 +350,6 @@ export default function Glovebox() {
               </View>
             ))}
 
-            <Rule style={{ marginVertical: space.lg }} />
-
-            {/* Attachment section */}
-            {renderAttachSection(docKey)}
-
             {/* Actions */}
             <View style={s.editActions}>
               <Button label="SAVE" onPress={() => saveDoc(docKey)} loading={saving} style={{ flex: 1 }} testID="glovebox-save-btn" />
@@ -666,8 +387,6 @@ const s = StyleSheet.create({
   docCard:      { borderWidth: 1, borderColor: colors.light.rule, borderRadius: radius.tiny, backgroundColor: colors.light.surface, overflow: 'hidden' },
   docCardHead:  { flexDirection: 'row', alignItems: 'center', padding: space.lg },
   docIconCircle:{ width: 36, height: 36, borderRadius: 18, borderWidth: 1, borderColor: colors.light.rule, alignItems: 'center', justifyContent: 'center' },
-  attachBadge:  { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: colors.light.amber, borderRadius: radius.tiny, paddingHorizontal: 6, paddingVertical: 2 },
-  thumbStrip:   { width: '100%', height: 120, borderTopWidth: 1, borderTopColor: colors.light.rule },
 
   // edit
   editBody:     { padding: space.lg, paddingBottom: space.xxl },
@@ -675,12 +394,4 @@ const s = StyleSheet.create({
   fieldDivider: { borderBottomWidth: 1, borderBottomColor: colors.light.rule },
   input:        { marginTop: space.sm, fontSize: 16, color: colors.light.ink, paddingVertical: Platform.OS === 'ios' ? space.sm : space.xs },
   editActions:  { flexDirection: 'row', gap: space.md, marginTop: space.xl },
-
-  // attachment
-  attachSection:  { marginBottom: space.lg },
-  attachPreview:  { width: '100%', height: 220, borderWidth: 1, borderColor: colors.light.rule, borderRadius: radius.tiny, backgroundColor: colors.light.surface, marginBottom: space.md },
-  pdfRow:         { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: colors.light.rule, borderRadius: radius.tiny, padding: space.lg, backgroundColor: colors.light.surface, marginBottom: space.md },
-  attachActions:  { flexDirection: 'row', gap: space.md },
-  attachAction:   { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: colors.light.rule, borderRadius: radius.tiny, paddingVertical: space.sm },
-  attachEmpty:    { borderWidth: 1, borderColor: colors.light.rule, borderRadius: radius.tiny, borderStyle: 'dashed', padding: space.xl, alignItems: 'center', backgroundColor: colors.light.surface },
 });

@@ -240,6 +240,10 @@ class Trip(TripCreate):
     actual_distance_km: float = 0
     top_speed_kmh: float = 0
     duration_min: int = 0
+    # Index into the ordered leg list [start, ...waypoints, end]. Leg N goes
+    # from points[N] to points[N+1]. Organiser advances via /advance-leg as
+    # they arrive at each stop. Last leg ends with PATCH status=completed.
+    current_leg_index: int = 0
     created_at: str
 
 
@@ -738,6 +742,42 @@ async def update_trip(trip_id: str, body: TripUpdate, user: dict = Depends(get_c
             await hub.end_trip(trip_id)
         except Exception:
             pass
+    fresh = await db.trips.find_one({"id": trip_id}, {"_id": 0})
+    return trip_from_doc(fresh)
+
+
+@api.post("/trips/{trip_id}/advance-leg", response_model=Trip)
+async def advance_trip_leg(trip_id: str, user: dict = Depends(get_current_user)):
+    """Bump current_leg_index by 1. Organiser-only. Active trips only.
+
+    A trip with `start`, `end`, and N waypoints has N+1 legs. The organiser
+    taps "arrived" as they reach each stop; this advances the pointer so the
+    crew's NAVIGATE button (and the leg label) updates to the next segment.
+    Refusing past-the-end here means the frontend can rely on the index
+    always being a valid leg position; the last leg is ended via the
+    existing PATCH status=completed flow, not this endpoint.
+    """
+    doc = await db.trips.find_one({"id": trip_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    if doc["user_id"] != user["id"]:
+        raise HTTPException(status_code=403, detail="Only the organiser can advance the leg.")
+    if doc.get("status") != "active":
+        raise HTTPException(status_code=400, detail="Trip is not active.")
+    total_legs = 1 + len(doc.get("waypoints") or [])
+    current = int(doc.get("current_leg_index") or 0)
+    next_index = current + 1
+    if next_index >= total_legs:
+        raise HTTPException(
+            status_code=400,
+            detail="Already on the final leg — end the ride instead of advancing.",
+        )
+    await db.trips.update_one({"id": trip_id}, {"$set": {"current_leg_index": next_index}})
+    # Tell the convoy room so crew screens flip to the next leg without a refetch.
+    try:
+        await hub._fanout(trip_id, {"type": "leg", "current_leg_index": next_index})
+    except Exception:
+        pass
     fresh = await db.trips.find_one({"id": trip_id}, {"_id": 0})
     return trip_from_doc(fresh)
 
