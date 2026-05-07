@@ -92,6 +92,10 @@ export function useConvoySocket(
      * the ride screen ended up appearing to never see SOS alerts even
      * though the server was broadcasting them correctly. */
     onSos?: (sos: SosPayload) => void;
+    /** Fires when the organiser advances the trip's current_leg_index via
+     * POST /trips/{id}/advance-leg. Lets crew clients flip the leg label and
+     * NAVIGATE button to the next segment without a full trip refetch. */
+    onLegChange?: (currentLegIndex: number) => void;
   },
 ) {
   const [members, setMembers] = useState<ConvoyMember[]>([]);
@@ -104,10 +108,12 @@ export function useConvoySocket(
   const wsRef = useRef<WebSocket | null>(null);
   const onTripEndedRef = useRef(opts?.onTripEnded);
   const onSosRef = useRef(opts?.onSos);
+  const onLegChangeRef = useRef(opts?.onLegChange);
   // Stash the handlers in refs so changing the closures on the consumer
   // side doesn't tear down and rebuild the socket every render.
   useEffect(() => { onTripEndedRef.current = opts?.onTripEnded; }, [opts?.onTripEnded]);
   useEffect(() => { onSosRef.current = opts?.onSos; }, [opts?.onSos]);
+  useEffect(() => { onLegChangeRef.current = opts?.onLegChange; }, [opts?.onLegChange]);
 
   useEffect(() => {
     if (!tripId) return;
@@ -157,6 +163,8 @@ export function useConvoySocket(
               sender_user_id: d.sender_user_id || '',
               sos_id: d.sos_id,
             });
+          } else if (d.type === 'leg' && typeof d.current_leg_index === 'number') {
+            onLegChangeRef.current?.(d.current_leg_index);
           }
         } catch {}
       };

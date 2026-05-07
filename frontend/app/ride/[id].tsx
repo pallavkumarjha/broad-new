@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Alert, StatusBar, Platform, Animated, useWindowDimensions } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Alert, StatusBar, Platform, Animated, useWindowDimensions, Linking } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
@@ -539,9 +539,15 @@ export default function LiveRide() {
       { cancelable: false },
     );
   }, [currentUser?.id, router]);
+  // Crew clients receive leg advances via the convoy WS (server fans out a
+  // {type:"leg"} payload from POST /trips/{id}/advance-leg). Patch local trip
+  // state so the leg label and NAVIGATE button update without a full refetch.
+  const onLegChange = useCallback((idx: number) => {
+    setTrip((prev: any) => (prev ? { ...prev, current_leg_index: idx } : prev));
+  }, []);
   const { members: convoyMembers, state: convoyState, sendPos, retry: retryConvoy } = useConvoySocket(
     id,
-    { onTripEnded, onSos },
+    { onTripEnded, onSos, onLegChange },
   );
 
   // Broadcast own GPS position. Skip if no real fix yet — never send
@@ -567,6 +573,47 @@ export default function LiveRide() {
   }
 
   const allPoints = [trip.start, ...(trip.waypoints || []), trip.end].filter(Boolean);
+
+  // Leg derivation. A trip is an ordered point list; each pair of adjacent
+  // points is one leg. The organiser advances the pointer as they reach each
+  // stop (POST /advance-leg), so the NAVIGATE button always opens the *next
+  // segment*, not the entire trip. Crew clients receive the new index over
+  // the convoy WS so the label and Maps URL update for everyone.
+  const legPoints: Array<{ name: string; lat: number; lng: number }> = allPoints as any;
+  const totalLegs = Math.max(0, legPoints.length - 1);
+  const rawLegIndex = Number(trip.current_leg_index ?? 0);
+  const currentLegIndex = Math.max(0, Math.min(rawLegIndex, totalLegs - 1));
+  const legFrom = legPoints[currentLegIndex];
+  const legTo = legPoints[currentLegIndex + 1];
+  const isLastLeg = totalLegs <= 1 || currentLegIndex >= totalLegs - 1;
+
+  const openInGoogleMaps = () => {
+    if (!legFrom || !legTo) return;
+    // Universal deep-link format. Works for Maps app on iOS/Android and falls
+    // back to the web client when the app isn't installed. travelmode=driving
+    // matches the rider use case; OSRM also drives the on-screen polyline.
+    const url =
+      `https://www.google.com/maps/dir/?api=1` +
+      `&origin=${legFrom.lat},${legFrom.lng}` +
+      `&destination=${legTo.lat},${legTo.lng}` +
+      `&travelmode=driving`;
+    Linking.openURL(url).catch(() => {
+      Alert.alert("Couldn't open Maps", 'Google Maps is not available on this device.');
+    });
+  };
+
+  const advanceLeg = async () => {
+    if (!isOrganiser) return;
+    try {
+      const { data } = await api.post(`/trips/${id}/advance-leg`);
+      setTrip(data);
+    } catch (e: any) {
+      Alert.alert(
+        "Couldn't advance leg",
+        e?.response?.data?.detail || e?.message || 'Network error. Try again.',
+      );
+    }
+  };
 
   // Compute the marker list for the map. Self comes from local GPS state
   // (zero round-trip latency), crew comes from the WS state payload.
@@ -714,8 +761,14 @@ export default function LiveRide() {
               )}
             </View>
             {isOrganiser ? (
-              <TouchableOpacity onPress={endTrip} testID="ride-end-btn">
-                <Meta style={{ color: colors.dark.amber }}>END</Meta>
+              // Multi-stop trips: tap advances to the next leg until the final
+              // segment, where it falls back to ending the ride. Single-leg
+              // trips behave exactly as before — one tap, one END.
+              <TouchableOpacity
+                onPress={isLastLeg ? endTrip : advanceLeg}
+                testID={isLastLeg ? 'ride-end-btn' : 'ride-next-leg-btn'}
+              >
+                <Meta style={{ color: colors.dark.amber }}>{isLastLeg ? 'END' : 'NEXT'}</Meta>
               </TouchableOpacity>
             ) : (
               <TouchableOpacity onPress={leaveRide} testID="ride-leave-btn">
@@ -740,6 +793,30 @@ export default function LiveRide() {
           </View>
 
         <ScrollView contentContainerStyle={{ paddingBottom: space.xl }}>
+          {/* Leg block — current segment label and "open in Google Maps" jump.
+              Hidden when the trip has only a single leg (no waypoints), since
+              the label "LEG 1/1" adds nothing for a straight A→B trip. The
+              NAVIGATE button stays available for everyone (organiser + crew)
+              so any rider can launch turn-by-turn for the current segment. */}
+          {legFrom && legTo && (
+            <View style={styles.legBlock}>
+              {totalLegs > 1 && (
+                <Eyebrow color={colors.dark.inkMuted}>
+                  LEG {currentLegIndex + 1}/{totalLegs} — {(legFrom.name || 'START').toUpperCase()} → {(legTo.name || 'END').toUpperCase()}
+                </Eyebrow>
+              )}
+              <TouchableOpacity
+                onPress={openInGoogleMaps}
+                testID="ride-navigate-btn"
+                style={styles.navigateBtn}
+                activeOpacity={0.85}
+              >
+                <Feather name="navigation" size={14} color={colors.dark.bg} />
+                <Meta style={{ color: colors.dark.bg, marginLeft: 8 }}>NAVIGATE · GOOGLE MAPS</Meta>
+              </TouchableOpacity>
+            </View>
+          )}
+
           {/* Map — self + crew live markers, diffed by id inside the WebView.
               `routeCoords` is the OSRM road-following polyline; falls back to
               straight-line waypoint connections when not yet loaded. */}
@@ -789,14 +866,17 @@ export default function LiveRide() {
             </View>
           </View>
 
-          {/* Speedometer */}
+          {/* Speedometer — current speed + top speed only. Elapsed time and
+              covered distance were dropped from the live HUD; the rider asked
+              for a quieter screen. The values are still computed and sent on
+              ride completion (see endTrip → PATCH actual_distance_km / duration_min). */}
           <View style={styles.speedoBlock}>
             <Meta style={{ color: colors.dark.inkMuted }}>SPEED — KM/H</Meta>
             <Text testID="ride-speed-text" style={[type.instrument, { color: colors.dark.ink, marginTop: 4 }]}>{displaySpeed}</Text>
-            <View style={styles.subRow}>
-              <View><Meta style={{ color: colors.dark.inkMuted }}>TOP</Meta><Text style={[type.h2, { color: colors.dark.ink, marginTop: 2 }]}>{Math.round(topSpeed)}</Text></View>
-              <View><Meta style={{ color: colors.dark.inkMuted }}>ELAPSED</Meta><Text style={[type.h2, { color: colors.dark.ink, fontFamily: fonts.mono, marginTop: 2 }]}>{fmtTime(elapsed)}</Text></View>
-              <View><Meta style={{ color: colors.dark.inkMuted }}>COVERED</Meta><Text style={[type.h2, { color: colors.dark.ink, marginTop: 2 }]}>{distanceCovered}<Text style={[type.meta, { color: colors.dark.inkMuted }]}> KM</Text></Text></View>
+            <View style={styles.topRow}>
+              <Meta style={{ color: colors.dark.inkMuted }}>TOP</Meta>
+              <Text style={[type.h2, { color: colors.dark.ink, marginLeft: space.sm }]}>{Math.round(topSpeed)}</Text>
+              <Text style={[type.meta, { color: colors.dark.inkMuted, marginLeft: 4 }]}>KM/H</Text>
             </View>
           </View>
 
@@ -917,7 +997,16 @@ const styles = StyleSheet.create({
   progressTrack: { height: 2, backgroundColor: 'rgba(217, 102, 6, 0.12)' },
   progressBar: { height: 2, backgroundColor: colors.dark.amber },
   speedoBlock: { padding: space.lg, alignItems: 'flex-start', borderBottomWidth: 1, borderBottomColor: colors.dark.rule },
-  subRow: { flexDirection: 'row', justifyContent: 'space-between', width: '100%', marginTop: space.lg, gap: space.lg },
+  topRow: { flexDirection: 'row', alignItems: 'center', marginTop: space.md },
+  legBlock: { paddingHorizontal: space.lg, paddingTop: space.md, paddingBottom: space.sm, gap: space.sm },
+  // Filled amber pill — high contrast against the dark basemap that follows
+  // it. Same vertical rhythm as `darkBlock` so the screen flows top-to-bottom.
+  navigateBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    backgroundColor: colors.dark.amber,
+    paddingVertical: 10, paddingHorizontal: space.lg,
+    borderRadius: 2,
+  },
   darkBlock: { padding: space.lg },
   convoyRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: space.sm, borderBottomWidth: 1, borderBottomColor: colors.dark.rule },
   statusDot: { width: 8, height: 8, borderRadius: 4 },
