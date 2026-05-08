@@ -349,7 +349,7 @@ export default function ProfileEdit() {
           <Button label="CANCEL" variant="ghost" onPress={() => router.back()} testID="edit-cancel-btn" />
         </View>
         <View style={{ width: space.sm }} />
-        <View style={{ flex: 2 }}>
+        <View style={{ flex: 1 }}>
           <Button label="SAVE" onPress={submit} loading={busy} testID="edit-save-btn" />
         </View>
       </View>
