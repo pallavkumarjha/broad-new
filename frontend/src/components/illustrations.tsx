@@ -160,67 +160,6 @@ export function RoadIllus({ width = 360, height = 180 }: Props) {
   );
 }
 
-// ─── Dawn — auth screens (login / register) ───────────────────────────────
-export function DawnIllus({ width = 360, height = 200 }: Props) {
-  const ink   = colors.light.ink;
-  const amber = colors.light.amber;
-  const muted = '#B8B3A6';
-  const cx = 400, cy = 265; // sun center
-
-  // 6 rays above the horizon, alternating lengths
-  const rays = [225, 248, 270, 292, 315].map((deg, i) => {
-    const rad = (deg * Math.PI) / 180;
-    const r1 = 55, r2 = i % 2 === 0 ? 90 : 78;
-    return {
-      x1: cx + Math.cos(rad) * r1,
-      y1: cy + Math.sin(rad) * r1,
-      x2: cx + Math.cos(rad) * r2,
-      y2: cy + Math.sin(rad) * r2,
-    };
-  });
-
-  return (
-    <View style={[styles.wrap, { width, height }]}>
-      <Svg width={width} height={height} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid slice">
-        <PaperBg />
-        {/* Sun corona */}
-        <Circle cx={cx} cy={cy} r={100} fill={amber} opacity={0.07} />
-        <Circle cx={cx} cy={cy} r={72}  fill={amber} opacity={0.11} />
-        <Circle cx={cx} cy={cy} r={50}  fill="none" stroke={amber} strokeWidth={1.2} opacity={0.5} />
-        {/* Rays */}
-        {rays.map((r, i) => (
-          <Line key={i} x1={r.x1} y1={r.y1} x2={r.x2} y2={r.y2}
-            stroke={amber} strokeWidth={1.5} opacity={0.7} />
-        ))}
-        {/* Sun disc */}
-        <Circle cx={cx} cy={cy} r={36} fill={amber} opacity={0.25} />
-        <Circle cx={cx} cy={cy} r={22} fill={amber} />
-        {/* Far hills — muted */}
-        <Path
-          d="M 0 265 Q 100 245 210 258 Q 310 270 400 265 Q 490 260 590 252 Q 700 244 800 262 L 800 400 L 0 400 Z"
-          fill="#E0DCD2" stroke={muted} strokeWidth={0.8}
-        />
-        {/* Near ridge — ink */}
-        <Path
-          d="M 0 315 Q 90 295 170 308 Q 280 325 355 298 Q 400 285 445 298 Q 525 318 630 300 Q 720 288 800 310 L 800 400 L 0 400 Z"
-          fill={ink}
-        />
-        {/* Road lane */}
-        <Path
-          d="M 305 400 L 388 265 L 412 265 L 495 400 Z"
-          fill="#E8E4DB" stroke={ink} strokeWidth={1}
-        />
-        {/* Amber road dashes */}
-        {[0, 1, 2, 3].map((i) => {
-          const y = 300 + i * 24;
-          const hw = 2 + i * 1.5;
-          return <Rect key={i} x={400 - hw} y={y} width={hw * 2} height={10} fill={amber} opacity={0.9} />;
-        })}
-      </Svg>
-    </View>
-  );
-}
-
 // ─── Compass — onboarding / permissions screen ────────────────────────────
 export function CompassIllus({ width = 360, height = 200 }: Props) {
   const ink   = colors.light.ink;
@@ -331,9 +270,9 @@ export function EmptyRoadIllus({ width = 360, height = 160, dark = false }: Prop
   );
 }
 
-// ─── Sunrise Ride — home screen hero ─────────────────────────────────────────
-// Bike silhouette heading toward a dawn horizon. Adapted from DawnIllus;
-// the motorcycle grounds the editorial scene in the product's purpose.
+// ─── Sunrise Ride — welcome screen hero ──────────────────────────────────────
+// Bike silhouette heading toward a dawn horizon. Grounds the editorial
+// scene in the product's purpose.
 export function SunriseRideIllus({ width = 360, height = 180 }: Props) {
   const ink   = colors.light.ink;
   const amber = colors.light.amber;
