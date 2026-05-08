@@ -7,20 +7,34 @@ import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../../src/contexts/AuthContext';
 import { api } from '../../src/lib/api';
 import { colors, type, space, radius, fonts } from '../../src/theme/tokens';
-import { Eyebrow, Card, Rule, Meta } from '../../src/components/ui';
+import { Eyebrow, Meta } from '../../src/components/ui';
 import { FIELD_NOTES, pickFromSeed } from '../../src/lib/content';
-import { EmptyRoadIllus, SunriseRideIllus, SummitIllus, TripIllus } from '../../src/components/illustrations';
+import { HorizonStrip, MountainIllus, SummitIllus, EmptyRoadIllus } from '../../src/components/illustrations';
 import { SkeletonTripRow } from '../../src/components/Skeleton';
 
 type Trip = any;
 
-// ── helpers ──────────────────────────────────────────────────────────────────
+// ── helpers ────────────────────────────────────────────────────────────────
+
+const NUMBER_WORDS = ['Zero','One','Two','Three','Four','Five','Six','Seven','Eight','Nine','Ten'];
+function spellSmall(n: number): string {
+  if (n >= 0 && n <= 10) return NUMBER_WORDS[n];
+  return String(n);
+}
 
 function greet() {
   const h = new Date().getHours();
   if (h < 12) return 'GOOD MORNING';
   if (h < 17) return 'GOOD AFTERNOON';
   return 'GOOD EVENING';
+}
+
+function todayStrip(homeCity?: string | null): string {
+  const d = new Date();
+  const day = d.toLocaleDateString('en-IN', { weekday: 'short' }).toUpperCase();
+  const dom = d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }).toUpperCase();
+  const place = homeCity ? ` · ${homeCity.toUpperCase()}` : '';
+  return `${day} · ${dom}${place}`;
 }
 
 function daysUntil(dateStr: string | undefined | null): number | null {
@@ -30,9 +44,10 @@ function daysUntil(dateStr: string | undefined | null): number | null {
   return d >= 0 ? d : null;
 }
 
-function fmtKm(km: number) {
-  if (km >= 1000) return `${(km / 1000).toFixed(1)}K`;
-  return String(Math.round(km));
+function dayOfTrip(started?: string | null): number {
+  if (!started) return 1;
+  const ms = Date.now() - new Date(started).getTime();
+  return Math.max(1, Math.floor(ms / 86400000) + 1);
 }
 
 function fmtDate(dateStr: string | undefined | null): string {
@@ -41,7 +56,17 @@ function fmtDate(dateStr: string | undefined | null): string {
   return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }).toUpperCase();
 }
 
-// ── component ─────────────────────────────────────────────────────────────────
+function fmtDow(dateStr: string | undefined | null): string {
+  if (!dateStr) return '';
+  return new Date(dateStr).toLocaleDateString('en-IN', { weekday: 'short' }).toUpperCase();
+}
+
+function startOfMonth(): number {
+  const d = new Date();
+  return new Date(d.getFullYear(), d.getMonth(), 1).getTime();
+}
+
+// ── component ──────────────────────────────────────────────────────────────
 
 export default function Home() {
   const { user } = useAuth();
@@ -54,7 +79,6 @@ export default function Home() {
     placeholderData: (prev) => prev,
   });
 
-  // Join requests — to detect approved ones not yet in an active ride
   const reqsQuery = useQuery<any[]>({
     queryKey: ['users', 'me', 'trip-requests'],
     queryFn: async () => (await api.get('/users/me/trip-requests')).data,
@@ -75,23 +99,34 @@ export default function Home() {
     .sort((a: Trip, b: Trip) => new Date(a.date).getTime() - new Date(b.date).getTime())[0] || null;
   const daysToNext = nextTrip ? daysUntil(nextTrip.date) : null;
 
-  // Approved join requests for planned/active trips that the user is a crew member of
+  // Approved join requests for planned/active trips
   const approvedReqs = (reqsQuery.data ?? []).filter(
     (r: any) => r.status === 'approved' && (r.trip_status === 'planned' || r.trip_status === 'active')
   );
 
-  // Unread notification badge — polled lightly; refetched on focus by RQ defaults.
+  // Inbox indicator — single dot, no number
   const unreadQuery = useQuery<{ count: number }>({
     queryKey: ['notifications', 'unread-count'],
     queryFn: async () => (await api.get('/notifications/unread-count')).data,
     refetchInterval: 30000,
     placeholderData: (prev) => prev,
   });
-  const unreadCount = unreadQuery.data?.count ?? 0;
+  const hasUnread = (unreadQuery.data?.count ?? 0) > 0;
 
+  // Upcoming docket — top 3 (excluding the active trip if any)
   const upcoming = planned.slice(0, 3);
 
-  // Live dot pulse
+  // Monthly micro-stat — completed rides in the current calendar month
+  const monthStart = startOfMonth();
+  const monthly = completed.filter((t: Trip) => {
+    const ts = new Date(t.ended_at || t.date || 0).getTime();
+    return Number.isFinite(ts) && ts >= monthStart;
+  });
+  const monthlyKm = Math.round(
+    monthly.reduce((s: number, t: Trip) => s + (t.actual_distance_km || t.distance_km || 0), 0)
+  );
+
+  // Live dot pulse for active state
   const dotBlink = useRef(new Animated.Value(1)).current;
   useEffect(() => {
     if (!active) return;
@@ -111,394 +146,506 @@ export default function Home() {
 
   const isRefreshing = (tripsQuery.isRefetching || reqsQuery.isRefetching) && !isInitialLoading;
 
+  const fieldNote = pickFromSeed(FIELD_NOTES, new Date().toDateString() + (user?.id || ''));
+
+  // ── render ───────────────────────────────────────────────────────────────
+
   return (
     <SafeAreaView style={styles.container} edges={['top']} testID="home-screen">
       <ScrollView
         contentContainerStyle={{ paddingBottom: space.xxl }}
-        refreshControl={
-          <RefreshControl refreshing={isRefreshing} onRefresh={onRefresh} tintColor={colors.light.ink} />
-        }
+        refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={onRefresh} tintColor={colors.light.ink} />}
       >
-        {/* ── Hero illustration ──────────────────────────────────── */}
-        <SunriseRideIllus width={width} height={160} />
-
-        {/* ── Header ────────────────────────────────────────────── */}
-        <View style={styles.header}>
+        {/* TOP STRIP — minimal */}
+        <View style={styles.top}>
           <View style={{ flex: 1 }}>
-            <Eyebrow>{greet()} · {new Date().toDateString().toUpperCase()}</Eyebrow>
-            <Text style={[type.h1, { color: colors.light.ink, marginTop: space.xs }]}>
-              {user?.name?.split(' ')[0] || 'Rider'}.
-            </Text>
+            <Text style={styles.todayMeta}>{todayStrip(user?.home_city)}</Text>
+            <Text style={styles.greetName}>{user?.name || 'Rider'}</Text>
           </View>
           <TouchableOpacity
             testID="home-notifications-btn"
             accessibilityLabel="Notifications"
             onPress={() => router.push('/notifications' as any)}
-            style={styles.bellBtn}
+            style={styles.inbox}
             activeOpacity={0.7}
           >
-            <Feather name="bell" size={22} color={colors.light.ink} />
-            {unreadCount > 0 && (
-              <View style={styles.bellBadge} testID="home-notifications-badge">
-                <Text style={styles.bellBadgeText}>
-                  {unreadCount > 9 ? '9+' : String(unreadCount)}
-                </Text>
-              </View>
-            )}
+            <Text style={styles.inboxLabel}>INBOX</Text>
+            {hasUnread && <View style={styles.inboxDot} testID="home-notifications-badge" />}
           </TouchableOpacity>
         </View>
 
-        {/* ── Stats strip ───────────────────────────────────────── */}
-        {user?.stats && (
-          <>
-            <Rule style={{ marginHorizontal: space.lg }} />
-            <View style={styles.statsRow}>
-              <View style={styles.statCell}>
-                <Text style={[type.h2, { color: colors.light.ink }]}>{fmtKm(user.stats.total_km)}</Text>
-                <Meta style={{ marginTop: 2 }}>KM RIDDEN</Meta>
-              </View>
-              <View style={styles.statDivider} />
-              <View style={styles.statCell}>
-                <Text style={[type.h2, { color: colors.light.ink }]}>{user.stats.trips_completed}</Text>
-                <Meta style={{ marginTop: 2 }}>RIDES</Meta>
-              </View>
-              <View style={styles.statDivider} />
-              <View style={styles.statCell}>
-                <Text style={[type.h2, { color: colors.light.ink }]}>{fmtKm(user.stats.highest_point_m)}</Text>
-                <Meta style={{ marginTop: 2 }}>PEAK (M)</Meta>
-              </View>
-            </View>
-            <Rule style={{ marginHorizontal: space.lg }} />
-          </>
-        )}
+        {/* HORIZON STRIP */}
+        <HorizonStrip width={width} height={56} />
 
-        {/* ── Active trip card ──────────────────────────────────── */}
-        {active && (
-          <TouchableOpacity
-            testID="active-trip-card"
-            activeOpacity={0.9}
-            onPress={() => router.push(`/ride/${active.id}`)}
-            style={styles.activeWrap}
-          >
-            <View style={styles.activeCard}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                <Animated.View style={[styles.liveDot, { opacity: dotBlink }]} testID="active-trip-dot" />
-                <Eyebrow color={colors.dark.amber}>TRIP IN PROGRESS</Eyebrow>
-              </View>
-              <Text style={[type.h2, { color: colors.dark.ink, marginTop: space.xs }]}>{active.name}</Text>
-              <Text style={[type.meta, { color: colors.dark.inkMuted, marginTop: space.sm }]}>
-                {active.distance_km} KM · {active.crew?.length || 0} CREW · TAP TO OPEN INSTRUMENT PANEL
-              </Text>
-            </View>
-          </TouchableOpacity>
-        )}
-
-        {/* ── Next ride countdown ───────────────────────────────── */}
-        {!active && nextTrip && daysToNext !== null && (
-          <TouchableOpacity
-            testID="next-ride-banner"
-            activeOpacity={0.88}
+        {/* HERO — active OR brief OR empty */}
+        {active ? (
+          <ActiveHero trip={active} day={dayOfTrip(active.started_at)} dotBlink={dotBlink} onPress={() => router.push(`/ride/${active.id}`)} />
+        ) : nextTrip ? (
+          <BriefPoster
+            trip={nextTrip}
+            days={daysToNext ?? 0}
             onPress={() => router.push(`/trip/${nextTrip.id}`)}
-            style={[styles.banner, styles.bannerAmber]}
-          >
-            <View style={{ flex: 1 }}>
-              <Eyebrow color={colors.light.amber}>NEXT RIDE</Eyebrow>
-              <Text style={[type.h3, { color: colors.light.ink, marginTop: 2 }]}>{nextTrip.name}</Text>
-              <Meta style={{ marginTop: 4 }}>{fmtDate(nextTrip.date)} · {nextTrip.distance_km} KM</Meta>
-            </View>
-            <View style={styles.countdownBadge}>
-              <Text style={[type.h2, { color: colors.light.ink, lineHeight: 28 }]}>
-                {daysToNext === 0 ? 'TODAY' : `${daysToNext}`}
-              </Text>
-              {daysToNext > 0 && <Meta>DAYS</Meta>}
-            </View>
-          </TouchableOpacity>
-        )}
+          />
+        ) : !isInitialLoading && trips.length === 0 ? (
+          <View style={styles.emptyHero}>
+            <SummitIllus width={width - space.lg * 2} height={170} />
+            <Text style={[type.body, { color: colors.light.inkMuted, marginTop: space.md, textAlign: 'center' }]}>
+              Your first summit awaits.
+            </Text>
+          </View>
+        ) : null}
 
-        {/* ── Approved join request banner ──────────────────────── */}
+        {/* APPROVED JOIN — small inline tag, only when present */}
         {approvedReqs.length > 0 && (
           <TouchableOpacity
             testID="approved-req-banner"
-            activeOpacity={0.88}
+            activeOpacity={0.85}
             onPress={() => router.push(`/trip/${approvedReqs[0].trip_id}`)}
-            style={[styles.banner, styles.bannerGreen]}
+            style={styles.approvedTag}
           >
-            <Feather name="check-circle" size={18} color="#2D6A4F" style={{ marginTop: 1 }} />
-            <View style={{ flex: 1, marginLeft: space.sm }}>
-              <Eyebrow color="#2D6A4F">YOU'RE IN</Eyebrow>
-              <Text style={[type.h3, { color: colors.light.ink, marginTop: 2 }]}>
-                {approvedReqs[0].trip_name || 'Your request was approved'}
-              </Text>
-              {approvedReqs.length > 1 && (
-                <Meta style={{ marginTop: 4 }}>+{approvedReqs.length - 1} more</Meta>
-              )}
-            </View>
-            <Feather name="chevron-right" size={18} color={colors.light.inkMuted} />
+            <Feather name="check-circle" size={14} color="#2D6A4F" />
+            <Text style={styles.approvedText}>
+              YOU'RE IN · {(approvedReqs[0].trip_name || 'JOIN APPROVED').toUpperCase()}
+              {approvedReqs.length > 1 ? ` · +${approvedReqs.length - 1} MORE` : ''}
+            </Text>
+            <Feather name="chevron-right" size={14} color={colors.light.inkMuted} />
           </TouchableOpacity>
         )}
 
-        {/* ── Quick actions ─────────────────────────────────────── */}
-        <View style={styles.section}>
-          <Eyebrow>QUICK ACTIONS</Eyebrow>
-          <View style={styles.actionsRow}>
-            <TouchableOpacity
-              testID="quick-action-plan"
-              onPress={() => router.push('/plan')}
-              style={styles.actionBox}
-              activeOpacity={0.85}
-            >
-              <Feather name="map" size={20} color={colors.light.ink} />
-              <Text style={[type.h3, { color: colors.light.ink, marginTop: space.md }]}>Plan a route</Text>
-              <Meta style={{ marginTop: space.xs }}>PLOT — INVITE — RIDE</Meta>
-            </TouchableOpacity>
-            <TouchableOpacity
-              testID="quick-action-discover"
-              onPress={() => router.push('/(tabs)/discover')}
-              style={styles.actionBox}
-              activeOpacity={0.85}
-            >
-              <Feather name="globe" size={20} color={colors.light.ink} />
-              <Text style={[type.h3, { color: colors.light.ink, marginTop: space.md }]}>Find a ride</Text>
-              <Meta style={{ marginTop: space.xs }}>JOIN OPEN CONVOYS</Meta>
-            </TouchableOpacity>
+        {/* MICRO STAT RIBBON — only when there's something to say */}
+        {monthlyKm > 0 && (
+          <View style={styles.ribbon}>
+            <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 8, flex: 1 }}>
+              <Text style={styles.ribbonNum}>{monthlyKm.toLocaleString()}</Text>
+              <Text style={styles.ribbonBody}>
+                km this month, {monthly.length === 1 ? 'one trip' : `${monthly.length} trips`}.
+              </Text>
+            </View>
           </View>
-        </View>
+        )}
 
-        {/* ── Upcoming trips ────────────────────────────────────── */}
+        {/* DOCKET */}
         <View style={styles.section}>
           <View style={styles.sectionHead}>
-            <Eyebrow>UPCOMING — {upcoming.length}</Eyebrow>
+            <Eyebrow>{active ? 'AFTER THIS RIDE' : 'THE DOCKET · UPCOMING'}</Eyebrow>
             <TouchableOpacity onPress={() => router.push('/(tabs)/trips')}>
-              <Meta>VIEW ALL →</Meta>
+              <Text style={[type.meta, { color: colors.light.ink }]}>VIEW ALL →</Text>
             </TouchableOpacity>
           </View>
-          <Rule style={{ marginTop: space.sm }} />
           {isInitialLoading ? (
-            <View>
+            <View style={{ marginTop: space.md }}>
               <SkeletonTripRow testID="home-skel-row-1" />
               <SkeletonTripRow testID="home-skel-row-2" />
             </View>
           ) : upcoming.length === 0 ? (
-            <View style={styles.emptyUpcoming}>
-              <EmptyRoadIllus width={width - space.lg * 2} height={130} />
+            <View style={styles.emptyDocket}>
+              <EmptyRoadIllus width={width - space.lg * 2} height={120} />
               <Text style={[type.body, { color: colors.light.inkMuted, marginTop: space.md }]}>
                 No trips on the horizon. Plot one.
               </Text>
             </View>
           ) : (
-            upcoming.map((t: Trip, i: number) => {
-              const crew = t.crew?.length || 0;
-              return (
-                <TouchableOpacity
-                  key={t.id}
-                  testID={`upcoming-trip-${i}`}
-                  onPress={() => router.push(`/trip/${t.id}`)}
-                  style={styles.tripRow}
-                  activeOpacity={0.7}
-                >
-                  <View style={{ flex: 1 }}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                      <Text style={[type.h3, { color: colors.light.ink }]}>{t.name}</Text>
-                      {t.date && (
-                        <View style={styles.datePill}>
-                          <Text style={[type.meta, { color: colors.light.amber, fontSize: 9, letterSpacing: 1 }]}>
-                            {fmtDate(t.date)}
-                          </Text>
-                        </View>
-                      )}
+            <View style={styles.docketList}>
+              {upcoming.map((t: Trip, i: number) => {
+                const idx = String(i + 1).padStart(2, '0');
+                const crew = t.crew?.length || 0;
+                const startName = t.start?.name?.toUpperCase() || '';
+                const endName = t.end?.name?.toUpperCase() || '';
+                const route = startName && endName ? `${startName} → ${endName}` : startName;
+                const sub = [route, crew ? `${crew} CREW` : null].filter(Boolean).join(' · ');
+                return (
+                  <TouchableOpacity
+                    key={t.id}
+                    testID={`upcoming-trip-${i}`}
+                    onPress={() => router.push(`/trip/${t.id}`)}
+                    style={[styles.docketRow, i === 0 ? styles.docketRowFirst : null]}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.docketIdx}>{idx}</Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.docketTitle}>{t.name}</Text>
+                      {sub ? <Text style={styles.docketSub}>{sub}</Text> : null}
                     </View>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 }}>
-                      <Meta>{t.start?.name?.toUpperCase()} → {t.end?.name?.toUpperCase()} · {t.distance_km} KM</Meta>
-                      {crew > 0 && (
-                        <View style={styles.crewPill}>
-                          <Feather name="users" size={9} color={colors.light.inkMuted} />
-                          <Text style={[type.meta, { fontSize: 9, color: colors.light.inkMuted, marginLeft: 3 }]}>
-                            {crew}
-                          </Text>
-                        </View>
-                      )}
+                    <View style={{ alignItems: 'flex-end' }}>
+                      <Text style={styles.docketDate}>{fmtDate(t.date)}</Text>
+                      <Text style={styles.docketDow}>{fmtDow(t.date)}</Text>
                     </View>
-                  </View>
-                  <Feather name="chevron-right" size={20} color={colors.light.inkMuted} />
-                </TouchableOpacity>
-              );
-            })
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
           )}
         </View>
 
-        {/* ── Last ride recap ───────────────────────────────────── */}
+        {/* PAGE-BREAK QUOTE — field note */}
+        <View style={styles.pq}>
+          <Text style={styles.pqQuote}>"{fieldNote.text}"</Text>
+          <Text style={styles.pqBy}>— {fieldNote.by.toUpperCase()}</Text>
+        </View>
+
+        {/* POSTCARD — last ride */}
         {lastRide && (
           <View style={styles.section}>
-            <Eyebrow>LAST RIDE</Eyebrow>
+            <View style={styles.sectionHead}>
+              <Eyebrow>LAST RIDE · ARCHIVED</Eyebrow>
+              {lastRide.date ? <Meta>{fmtDate(lastRide.date)}</Meta> : null}
+            </View>
             <TouchableOpacity
               testID="last-ride-card"
               activeOpacity={0.88}
               onPress={() => router.push(`/trip/${lastRide.id}`)}
-              style={styles.lastRideCard}
+              style={styles.postcard}
             >
-              <TripIllus trip={lastRide} width={width - space.lg * 2} height={140} />
-              <View style={styles.lastRideBody}>
-                <Text style={[type.h3, { color: colors.light.ink }]}>{lastRide.name}</Text>
-                <Meta style={{ marginTop: 4 }}>
-                  {lastRide.start?.name?.toUpperCase()} → {lastRide.end?.name?.toUpperCase()}
-                </Meta>
-                <View style={styles.lastRideStats}>
-                  <View style={styles.lastStat}>
-                    <Text style={[type.h3, { color: colors.light.ink }]}>{lastRide.distance_km}</Text>
-                    <Meta>KM</Meta>
+              <View style={styles.postcardArt}>
+                <MountainIllus width={width - space.lg * 2} height={150} />
+                {lastRide.elevation_m ? (
+                  <View style={styles.stamp}>
+                    <Text style={styles.stampLbl}>PEAK</Text>
+                    <Text style={styles.stampNum}>{Number(lastRide.elevation_m).toLocaleString()}</Text>
+                    <Text style={styles.stampLbl}>METRES</Text>
                   </View>
-                  <View style={styles.lastStat}>
-                    <Text style={[type.h3, { color: colors.light.ink }]}>{lastRide.crew?.length || 0}</Text>
-                    <Meta>CREW</Meta>
-                  </View>
-                  {lastRide.date && (
-                    <View style={styles.lastStat}>
-                      <Text style={[type.h3, { color: colors.light.ink }]}>{fmtDate(lastRide.date)}</Text>
-                      <Meta>DATE</Meta>
-                    </View>
-                  )}
+                ) : null}
+              </View>
+              <View style={styles.postcardBody}>
+                <View style={styles.postcardTitleRow}>
+                  <Text style={styles.postcardTitle}>{lastRide.name}</Text>
+                  {lastRide.date ? <Text style={styles.postcardDate}>{fmtDate(lastRide.date)}</Text> : null}
+                </View>
+                <Text style={styles.postcardRoute}>
+                  {(lastRide.start?.name || '').toUpperCase()}
+                  {lastRide.end?.name ? ` → ${lastRide.end.name.toUpperCase()}` : ''}
+                </Text>
+                <View style={styles.postcardSpecs}>
+                  <Stat num={Math.round(lastRide.actual_distance_km || lastRide.distance_km || 0).toLocaleString()} lbl="KM" />
+                  {lastRide.duration_min ? (
+                    <>
+                      <View style={styles.statDivider} />
+                      <Stat num={Math.round((lastRide.duration_min || 0) / 60).toString()} lbl="HRS · MOVING" />
+                    </>
+                  ) : null}
+                  {lastRide.crew?.length ? (
+                    <>
+                      <View style={styles.statDivider} />
+                      <Stat num={String(lastRide.crew.length)} lbl="CREW" />
+                    </>
+                  ) : null}
                 </View>
               </View>
             </TouchableOpacity>
           </View>
         )}
 
-        {/* ── Summit illustration (no completed rides) ──────────── */}
-        {!lastRide && !isInitialLoading && trips.length === 0 && (
-          <View style={[styles.section, { alignItems: 'center' }]}>
-            <SummitIllus width={width - space.lg * 2} height={180} />
-            <Text style={[type.body, { color: colors.light.inkMuted, marginTop: space.md, textAlign: 'center' }]}>
-              Your first summit awaits.
-            </Text>
-          </View>
-        )}
+        {/* ACTIONS — demoted */}
+        <View style={styles.actions}>
+          <Text style={styles.actionsHead}>— PLOT YOUR NEXT</Text>
+          <ActionRow
+            testID="quick-action-plan"
+            label="Plan a route"
+            meta="PLOT · INVITE"
+            onPress={() => router.push('/plan')}
+            first
+          />
+          <ActionRow
+            testID="quick-action-discover"
+            label="Find a ride"
+            meta="JOIN CONVOY"
+            onPress={() => router.push('/(tabs)/discover')}
+          />
+        </View>
 
-        {/* ── Field note ────────────────────────────────────────── */}
-        <View style={styles.section}>
-          <View style={styles.sectionHead}>
-            <Eyebrow>FIELD NOTE</Eyebrow>
-            <Meta>CHANGES DAILY</Meta>
-          </View>
-          <Card style={{ marginTop: space.sm }}>
-            {(() => {
-              const note = pickFromSeed(FIELD_NOTES, new Date().toDateString() + (user?.id || ''));
-              return (
-                <>
-                  <Text style={[type.bodyLg, { color: colors.light.ink, fontFamily: fonts.serifMed }]}>
-                    {note.text}
-                  </Text>
-                  <Text style={[type.meta, { color: colors.light.inkMuted, marginTop: space.md }]}>{note.by}</Text>
-                </>
-              );
-            })()}
-          </Card>
+        {/* COLOPHON */}
+        <View style={styles.colophon}>
+          <View style={styles.colophonRule} />
+          <Text style={styles.colophonText}>BROAD · MADE IN INDIA</Text>
         </View>
       </ScrollView>
     </SafeAreaView>
   );
 }
 
-// ── styles ────────────────────────────────────────────────────────────────────
+// ── sub-components ─────────────────────────────────────────────────────────
+
+function Stat({ num, lbl }: { num: string; lbl: string }) {
+  return (
+    <View style={{ flex: 1 }}>
+      <Text style={styles.statNum}>{num}</Text>
+      <Text style={styles.statLbl}>{lbl}</Text>
+    </View>
+  );
+}
+
+function ActionRow({ label, meta, onPress, first, testID }: { label: string; meta: string; onPress: () => void; first?: boolean; testID?: string }) {
+  return (
+    <TouchableOpacity
+      testID={testID}
+      onPress={onPress}
+      activeOpacity={0.7}
+      style={[styles.actionRow, first ? styles.actionRowFirst : null]}
+    >
+      <Text style={styles.actionLabel}>{label}</Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+        <Text style={styles.actionMeta}>{meta}</Text>
+        <Feather name="arrow-right" size={14} color={colors.light.ink} />
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+function BriefPoster({ trip, days, onPress }: { trip: Trip; days: number; onPress: () => void }) {
+  const startName = trip.start?.name?.toUpperCase() || '';
+  const endName = trip.end?.name?.toUpperCase() || '';
+  const dateStr = trip.date ? `${fmtDow(trip.date)} ${fmtDate(trip.date)}` : '';
+  const word = spellSmall(days);
+  // Use spelled-out word for ≤10 days, big numeral after.
+  const usingWord = days <= 10;
+
+  return (
+    <TouchableOpacity activeOpacity={0.92} onPress={onPress} style={styles.brief} testID="brief-poster">
+      <View style={styles.briefLabelRow}>
+        <Eyebrow>TODAY'S BRIEF</Eyebrow>
+        <Text style={[type.meta, { color: colors.light.amber }]}>NEXT RIDE</Text>
+      </View>
+      <View style={styles.poster}>
+        <View style={styles.posterLeft}>
+          <Text style={styles.posterPre}>In</Text>
+          <Text style={usingWord ? styles.posterWordL : styles.posterNum}>
+            {usingWord ? word : String(days)}
+          </Text>
+          <Text style={styles.posterWordS}>
+            {days === 1 ? 'day.' : 'days.'}
+          </Text>
+        </View>
+        <View style={styles.posterSpecs}>
+          {trip.distance_km ? (
+            <View>
+              <Text style={styles.posterSpecNum}>{Math.round(trip.distance_km).toLocaleString()}</Text>
+              <Text style={styles.posterSpecLbl}>KM</Text>
+            </View>
+          ) : null}
+          {trip.crew?.length ? (
+            <View style={{ marginTop: space.md, paddingTop: space.md, borderTopWidth: 1, borderTopColor: colors.light.rule }}>
+              <Text style={styles.posterSpecNum}>{trip.crew.length}</Text>
+              <Text style={styles.posterSpecLbl}>CREW</Text>
+            </View>
+          ) : null}
+        </View>
+      </View>
+      <View style={styles.briefRideLine}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.briefRideName}>{trip.name}</Text>
+          {(startName || dateStr) ? (
+            <Text style={styles.briefRouteMeta}>
+              {startName}
+              {endName ? <Text style={{ color: colors.light.inkMuted }}> → </Text> : null}
+              {endName}
+              {dateStr ? ` · ${dateStr}` : ''}
+            </Text>
+          ) : null}
+        </View>
+        <Text style={styles.briefOpen}>OPEN →</Text>
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+function ActiveHero({ trip, day, dotBlink, onPress }: { trip: Trip; day: number; dotBlink: Animated.Value; onPress: () => void }) {
+  const done = Math.round(trip.actual_distance_km || 0);
+  const planned = Math.round(trip.distance_km || 0);
+  const left = Math.max(0, planned - done);
+  const pct = planned > 0 ? Math.min(100, (done / planned) * 100) : 0;
+  const dayWord = spellSmall(day).toUpperCase();
+  return (
+    <TouchableOpacity testID="active-trip-card" activeOpacity={0.9} onPress={onPress} style={styles.active}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        <Animated.View style={[styles.liveDot, { opacity: dotBlink }]} testID="active-trip-dot" />
+        <Text style={styles.activePulse}>LIVE · DAY {dayWord}</Text>
+      </View>
+      <Text style={styles.activeTitle}>{trip.name}</Text>
+      <View style={styles.activeProgressBar}>
+        <View style={[styles.activeProgressFill, { width: `${pct}%` }]} />
+      </View>
+      <View style={styles.activeStats}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.activeStatNum}>{done.toLocaleString()}</Text>
+          <Text style={styles.activeStatLbl}>KM DONE</Text>
+        </View>
+        <View style={styles.activeStatDivider} />
+        <View style={{ flex: 1 }}>
+          <Text style={styles.activeStatNum}>{left.toLocaleString()}</Text>
+          <Text style={styles.activeStatLbl}>KM LEFT</Text>
+        </View>
+        {trip.crew?.length ? (
+          <>
+            <View style={styles.activeStatDivider} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.activeStatNum}>{trip.crew.length}</Text>
+              <Text style={styles.activeStatLbl}>CREW</Text>
+            </View>
+          </>
+        ) : null}
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+// ── styles ─────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.light.bg },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    paddingHorizontal: space.lg,
-    paddingTop: space.lg,
-    paddingBottom: space.md,
-  },
-  bellBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 4,
-  },
-  bellBadge: {
-    position: 'absolute',
-    top: 4,
-    right: 4,
-    minWidth: 16,
-    height: 16,
-    borderRadius: 8,
-    paddingHorizontal: 4,
-    backgroundColor: colors.light.amber,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  bellBadgeText: {
-    color: '#FFFFFF',
-    fontSize: 9,
-    fontWeight: '700',
-    letterSpacing: 0.3,
-  },
 
-  statsRow: {
-    flexDirection: 'row',
-    paddingHorizontal: space.lg,
-    paddingVertical: space.md,
+  top: {
+    paddingHorizontal: space.lg, paddingTop: space.md, paddingBottom: space.md,
+    flexDirection: 'row', alignItems: 'center',
   },
-  statCell: { flex: 1, alignItems: 'center' },
-  statDivider: { width: 1, backgroundColor: colors.light.rule },
+  todayMeta: { fontFamily: fonts.mono, fontSize: 10, letterSpacing: 1.4, color: colors.light.inkMuted, textTransform: 'uppercase' },
+  greetName: { fontFamily: fonts.serifMed, fontSize: 15, color: colors.light.ink, marginTop: 4 },
+  inbox: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 4, paddingHorizontal: 6 },
+  inboxLabel: { fontFamily: fonts.mono, fontSize: 11, letterSpacing: 1.2, color: colors.light.ink, textTransform: 'uppercase' },
+  inboxDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.light.amber },
 
-  section: { paddingHorizontal: space.lg, marginTop: space.xl },
-  sectionHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-
-  actionsRow: { flexDirection: 'row', gap: 12, marginTop: space.md },
-  actionBox: {
-    flex: 1, padding: space.md,
-    borderWidth: 1, borderColor: colors.light.rule, borderRadius: radius.tiny,
-    backgroundColor: colors.light.surface,
-    minHeight: 120, justifyContent: 'space-between',
+  // BRIEF (poster)
+  brief: {
+    marginHorizontal: space.lg,
+    paddingTop: space.lg, paddingBottom: space.lg,
+    borderBottomWidth: 1, borderBottomColor: colors.light.rule,
   },
+  briefLabelRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: space.md },
+  poster: { flexDirection: 'row', alignItems: 'flex-end', gap: 12 },
+  posterLeft: { flex: 1 },
+  posterPre: { fontFamily: 'Fraunces_400Regular', fontSize: 22, lineHeight: 24, fontStyle: 'italic', color: colors.light.inkMuted },
+  posterWordL: { fontFamily: fonts.serifBold, fontSize: 76, lineHeight: 70, letterSpacing: -3.5, color: colors.light.ink },
+  posterNum: { fontFamily: fonts.serifBold, fontSize: 84, lineHeight: 76, letterSpacing: -4, color: colors.light.ink },
+  posterWordS: { fontFamily: fonts.serifMed, fontSize: 28, lineHeight: 30, letterSpacing: -0.6, color: colors.light.ink, marginTop: 4 },
+  posterSpecs: { paddingBottom: 10, alignItems: 'flex-end' },
+  posterSpecNum: { fontFamily: fonts.serifSemi, fontSize: 22, lineHeight: 24, color: colors.light.ink },
+  posterSpecLbl: { fontFamily: fonts.mono, fontSize: 10, letterSpacing: 1, color: colors.light.inkMuted, textTransform: 'uppercase', marginTop: 2 },
+  briefRideLine: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', marginTop: space.lg },
+  briefRideName: { fontFamily: fonts.serifSemi, fontSize: 22, lineHeight: 24, color: colors.light.ink },
+  briefRouteMeta: { fontFamily: fonts.mono, fontSize: 10, letterSpacing: 1, color: colors.light.ink, textTransform: 'uppercase', marginTop: 4 },
+  briefOpen: { fontFamily: fonts.mono, fontSize: 11, letterSpacing: 1, color: colors.light.amber, textTransform: 'uppercase' },
 
-  activeWrap: { paddingHorizontal: space.lg, marginTop: space.lg },
-  activeCard: {
-    backgroundColor: colors.dark.bg, padding: space.lg,
-    borderRadius: radius.tiny, borderWidth: 1, borderColor: colors.dark.rule,
+  // ACTIVE
+  active: {
+    marginHorizontal: space.lg, marginTop: space.md,
+    backgroundColor: colors.dark.bg,
+    padding: space.lg, paddingBottom: space.md,
+    borderRadius: radius.tiny,
   },
   liveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.dark.amber },
+  activePulse: { fontFamily: fonts.mono, fontSize: 10, letterSpacing: 1.8, color: colors.dark.amber, textTransform: 'uppercase' },
+  activeTitle: { fontFamily: fonts.serifSemi, fontSize: 30, lineHeight: 32, letterSpacing: -0.5, color: colors.dark.ink, marginTop: space.sm },
+  activeProgressBar: { height: 2, backgroundColor: colors.dark.rule, marginTop: space.md, position: 'relative' },
+  activeProgressFill: { position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: colors.dark.amber },
+  activeStats: { flexDirection: 'row', marginTop: space.md },
+  activeStatDivider: { width: 1, backgroundColor: colors.dark.rule, marginHorizontal: space.md },
+  activeStatNum: { fontFamily: fonts.serifSemi, fontSize: 24, lineHeight: 26, letterSpacing: -0.3, color: colors.dark.ink },
+  activeStatLbl: { fontFamily: fonts.mono, fontSize: 9, letterSpacing: 1.4, color: colors.dark.inkMuted, textTransform: 'uppercase', marginTop: 4 },
 
-  banner: {
-    marginHorizontal: space.lg, marginTop: space.lg,
-    flexDirection: 'row', alignItems: 'center',
-    padding: space.md,
-    borderRadius: radius.tiny, borderWidth: 1,
+  // APPROVED
+  approvedTag: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    marginHorizontal: space.lg, marginTop: space.md,
+    paddingVertical: space.sm, paddingHorizontal: space.md,
+    borderWidth: 1, borderColor: '#52B788',
+    backgroundColor: '#F0FFF4',
+    borderRadius: radius.tiny,
   },
-  bannerAmber: { borderColor: colors.light.amber, backgroundColor: '#FDF6EC' },
-  bannerGreen: { borderColor: '#52B788', backgroundColor: '#F0FFF4' },
-  countdownBadge: { alignItems: 'center', minWidth: 44 },
+  approvedText: { flex: 1, fontFamily: fonts.mono, fontSize: 11, letterSpacing: 0.8, color: '#1C1B1A' },
 
-  tripRow: {
+  // RIBBON
+  ribbon: {
+    marginHorizontal: space.lg, marginTop: space.lg,
+    paddingHorizontal: space.md, paddingVertical: space.md,
+    borderWidth: 1, borderColor: colors.light.rule,
+    backgroundColor: colors.light.surface,
+    borderRadius: radius.tiny,
     flexDirection: 'row', alignItems: 'center',
+  },
+  ribbonNum: { fontFamily: fonts.serifSemi, fontSize: 22, color: colors.light.ink, letterSpacing: -0.3 },
+  ribbonBody: { fontFamily: 'Fraunces_400Regular', fontStyle: 'italic', fontSize: 14, color: colors.light.inkMuted },
+
+  // SECTIONS
+  section: { paddingHorizontal: space.lg, marginTop: space.xl },
+  sectionHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' },
+
+  // DOCKET
+  docketList: { marginTop: space.md },
+  docketRow: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 12,
     paddingVertical: space.md,
     borderBottomWidth: 1, borderBottomColor: colors.light.rule,
   },
-  datePill: {
-    borderWidth: 1, borderColor: colors.light.amber,
-    borderRadius: 3, paddingHorizontal: 5, paddingVertical: 2,
+  docketRowFirst: { borderTopWidth: 1, borderTopColor: colors.light.ink },
+  docketIdx: { width: 24, fontFamily: fonts.mono, fontSize: 10, letterSpacing: 1, color: '#8A8784', marginTop: 4 },
+  docketTitle: { fontFamily: fonts.serifMed, fontSize: 18, lineHeight: 22, color: colors.light.ink },
+  docketSub: { fontFamily: fonts.mono, fontSize: 10, letterSpacing: 0.8, color: colors.light.inkMuted, textTransform: 'uppercase', marginTop: 4 },
+  docketDate: { fontFamily: fonts.mono, fontSize: 11, letterSpacing: 1, color: colors.light.ink, textTransform: 'uppercase' },
+  docketDow: { fontFamily: fonts.mono, fontSize: 9, letterSpacing: 1, color: '#8A8784', textTransform: 'uppercase', marginTop: 3 },
+
+  // PAGE-BREAK QUOTE
+  pq: {
+    marginHorizontal: space.lg, marginTop: space.xl,
+    paddingVertical: space.lg,
+    borderTopWidth: 1, borderBottomWidth: 1, borderColor: colors.light.rule,
+    alignItems: 'center',
   },
-  crewPill: {
-    flexDirection: 'row', alignItems: 'center',
-    borderWidth: 1, borderColor: colors.light.rule,
-    borderRadius: 3, paddingHorizontal: 5, paddingVertical: 2,
+  pqQuote: {
+    fontFamily: 'Fraunces_400Regular', fontSize: 18, lineHeight: 26, fontStyle: 'italic',
+    color: colors.light.ink, textAlign: 'center', paddingHorizontal: space.md,
+  },
+  pqBy: {
+    fontFamily: fonts.mono, fontSize: 10, letterSpacing: 1.4, color: colors.light.inkMuted,
+    textTransform: 'uppercase', marginTop: space.sm,
   },
 
-  emptyUpcoming: { paddingVertical: space.md, alignItems: 'flex-start' },
-
-  lastRideCard: {
+  // POSTCARD
+  postcard: {
     marginTop: space.md,
     borderWidth: 1, borderColor: colors.light.rule, borderRadius: radius.tiny,
-    overflow: 'hidden',
     backgroundColor: colors.light.surface,
+    overflow: 'hidden',
   },
-  lastRideBody: { padding: space.md },
-  lastRideStats: {
-    flexDirection: 'row', gap: space.lg, marginTop: space.md,
-    paddingTop: space.md, borderTopWidth: 1, borderTopColor: colors.light.rule,
+  postcardArt: { position: 'relative' },
+  stamp: {
+    position: 'absolute', top: 12, right: 12,
+    backgroundColor: colors.light.bg,
+    borderWidth: 1, borderColor: colors.light.ink,
+    paddingVertical: 4, paddingHorizontal: 8,
+    alignItems: 'center', minWidth: 64,
   },
-  lastStat: { alignItems: 'center' },
+  stampLbl: { fontFamily: fonts.mono, fontSize: 8, letterSpacing: 1.2, color: colors.light.ink, textTransform: 'uppercase' },
+  stampNum: { fontFamily: fonts.serifSemi, fontSize: 16, color: colors.light.ink, letterSpacing: -0.5, marginVertical: 1 },
+  postcardBody: { padding: space.md },
+  postcardTitleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' },
+  postcardTitle: { fontFamily: fonts.serifSemi, fontSize: 22, lineHeight: 24, color: colors.light.ink, flex: 1 },
+  postcardDate: { fontFamily: fonts.mono, fontSize: 11, letterSpacing: 1, color: colors.light.ink, textTransform: 'uppercase' },
+  postcardRoute: { fontFamily: fonts.mono, fontSize: 10, letterSpacing: 1, color: colors.light.inkMuted, textTransform: 'uppercase', marginTop: 4 },
+  postcardSpecs: {
+    flexDirection: 'row', marginTop: space.md, paddingTop: space.md,
+    borderTopWidth: 1, borderTopColor: colors.light.rule, borderStyle: 'dashed',
+  },
+  statDivider: { width: 1, backgroundColor: colors.light.rule, marginHorizontal: space.md },
+  statNum: { fontFamily: fonts.serifSemi, fontSize: 20, lineHeight: 22, color: colors.light.ink },
+  statLbl: { fontFamily: fonts.mono, fontSize: 9, letterSpacing: 1.4, color: colors.light.inkMuted, textTransform: 'uppercase', marginTop: 4 },
+
+  // EMPTY STATES
+  emptyHero: { paddingHorizontal: space.lg, paddingTop: space.lg, alignItems: 'center' },
+  emptyDocket: { paddingTop: space.md, alignItems: 'flex-start' },
+
+  // ACTIONS
+  actions: { paddingHorizontal: space.lg, marginTop: space.xl },
+  actionsHead: { fontFamily: fonts.mono, fontSize: 10, letterSpacing: 2, color: colors.light.inkMuted, textTransform: 'uppercase', marginBottom: space.sm },
+  actionRow: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingVertical: space.md,
+    borderBottomWidth: 1, borderBottomColor: colors.light.rule,
+  },
+  actionRowFirst: { borderTopWidth: 1, borderTopColor: colors.light.rule },
+  actionLabel: { fontFamily: fonts.serifMed, fontSize: 17, color: colors.light.ink },
+  actionMeta: { fontFamily: fonts.mono, fontSize: 11, letterSpacing: 0.6, color: colors.light.inkMuted, textTransform: 'uppercase' },
+
+  // COLOPHON
+  colophon: { marginTop: space.xl, alignItems: 'center' },
+  colophonRule: { width: 24, height: 1, backgroundColor: '#8A8784', marginBottom: space.sm },
+  colophonText: { fontFamily: fonts.mono, fontSize: 9, letterSpacing: 2, color: '#8A8784', textTransform: 'uppercase' },
 });

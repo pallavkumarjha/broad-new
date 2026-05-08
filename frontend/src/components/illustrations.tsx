@@ -23,6 +23,24 @@ function PaperBg({ dark = false }: { dark?: boolean }) {
   );
 }
 
+// Thin horizon band — used as a quiet masthead accent on Home.
+// Two layered ridges + an amber road line + a sun. 56pt tall.
+export function HorizonStrip({ width = 390, height = 56 }: Props) {
+  const ink = colors.light.ink;
+  const amber = colors.light.amber;
+  const muted = colors.light.rule;
+  return (
+    <View style={{ width, height }}>
+      <Svg width={width} height={height} viewBox="0 0 390 56" preserveAspectRatio="none">
+        <Path d="M0 38 L40 30 L80 36 L130 22 L170 32 L210 18 L260 30 L310 24 L360 34 L390 28 L390 56 L0 56 Z" fill={muted} />
+        <Path d="M0 46 L60 40 L110 44 L160 36 L220 42 L280 36 L340 44 L390 40 L390 56 L0 56 Z" fill={ink} />
+        <Path d="M0 56 L390 56" stroke={amber} strokeWidth={2} />
+        <Circle cx={320} cy={20} r={6} fill={amber} />
+      </Svg>
+    </View>
+  );
+}
+
 export function MountainIllus({ width = 360, height = 180 }: Props) {
   const ink = colors.light.ink;
   const amber = colors.light.amber;
