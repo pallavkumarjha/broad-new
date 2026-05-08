@@ -80,6 +80,10 @@ export default function LiveRide() {
   // map looks up; the nonce is what useEffect actually compares.
   const [panToId, setPanToId] = useState<string | null>(null);
   const panNonceRef = useRef(0);
+  // Crew roster collapsed by default in the redesign — saves ~200px below
+  // the map. Avatar stack and rider count stay visible; tap reveals the
+  // full list with per-rider speed + pan-to-marker affordance.
+  const [crewExpanded, setCrewExpanded] = useState(false);
   // Re-render once a second so stale-marker computation (based on
   // updated_at vs Date.now()) actually picks up missing ticks even when
   // no fresh WS message has arrived to trigger a render.
@@ -733,94 +737,139 @@ export default function LiveRide() {
     );
   };
 
+  // Crew excluding self — used three times below (avatar stack, count badge,
+  // expanded roster). Compute once so the filter doesn't run per render path.
+  const otherCrew = convoyMembers.filter((m: any) => m.user_id !== myId);
+
+  // Status-rail dot colour for the WS connection state. The status rail is
+  // the only place we surface convoy connection health now (the wordy
+  // "RECONNECTING…/OFFLINE" header text is gone in the redesign), so the
+  // failed branch here also doubles as the manual retry hit target.
+  const wsDotColor =
+    convoyState.kind === 'connected' ? colors.dark.safe :
+    convoyState.kind === 'failed' ? colors.dark.sos :
+    colors.dark.amber; // connecting / reconnecting / idle
+
   return (
     <View style={styles.container} testID="live-ride-screen">
       <StatusBar barStyle="light-content" />
       <SafeAreaView style={{ flex: 1 }} edges={['top', 'bottom']}>
-          <View style={styles.header}>
-            <TouchableOpacity onPress={() => router.back()} testID="ride-close-btn"><Feather name="x" size={22} color={colors.dark.ink} /></TouchableOpacity>
-            <View style={{ flex: 1, alignItems: 'center' }}>
-              <Eyebrow color={colors.dark.amber}>
-                ● LIVE — {trip.name.toUpperCase()} {gpsActive ? '· GPS' : '· WAITING FOR FIX'}
-                {convoyState.kind === 'reconnecting' ? ` · RECONNECTING…` : ''}
-                {convoyState.kind === 'failed' ? ` · OFFLINE` : ''}
-              </Eyebrow>
-              {/* Manual retry — only shown after auto-reconnect has given up
-                  (terminal close codes 4401/4403/4404/4409/4410/4411). Without
-                  this the rider was stranded on "OFFLINE" with no way back. */}
-              {convoyState.kind === 'failed' && (
-                <TouchableOpacity
-                  onPress={retryConvoy}
-                  testID="ride-convoy-retry-btn"
-                  style={styles.retryPill}
-                  activeOpacity={0.85}
-                >
-                  <Feather name="refresh-cw" size={11} color={colors.dark.amber} />
-                  <Meta style={{ color: colors.dark.amber, marginLeft: 4 }}>RETRY CONVOY</Meta>
-                </TouchableOpacity>
-              )}
-            </View>
-            {isOrganiser ? (
-              // Multi-stop trips: tap advances to the next leg until the final
-              // segment, where it falls back to ending the ride. Single-leg
-              // trips behave exactly as before — one tap, one END.
-              <TouchableOpacity
-                onPress={isLastLeg ? endTrip : advanceLeg}
-                testID={isLastLeg ? 'ride-end-btn' : 'ride-next-leg-btn'}
-              >
-                <Meta style={{ color: colors.dark.amber }}>{isLastLeg ? 'END' : 'NEXT'}</Meta>
-              </TouchableOpacity>
-            ) : (
-              <TouchableOpacity onPress={leaveRide} testID="ride-leave-btn">
-                <Meta style={{ color: colors.dark.amber }}>LEAVE</Meta>
-              </TouchableOpacity>
-            )}
-          </View>
-          {/* M2 — Ride progress hairline */}
-          <View style={styles.progressTrack} testID="ride-progress-track">
-            <Animated.View
-              testID="ride-progress-bar"
-              style={[
-                styles.progressBar,
-                {
-                  width: progressAnim.interpolate({
-                    inputRange: [0, 1],
-                    outputRange: ['0%', '100%'],
-                  }),
-                },
-              ]}
-            />
-          </View>
 
-        <ScrollView contentContainerStyle={{ paddingBottom: space.xl }}>
-          {/* Leg block — current segment label and "open in Google Maps" jump.
-              Hidden when the trip has only a single leg (no waypoints), since
-              the label "LEG 1/1" adds nothing for a straight A→B trip. The
-              NAVIGATE button stays available for everyone (organiser + crew)
-              so any rider can launch turn-by-turn for the current segment. */}
-          {legFrom && legTo && (
-            <View style={styles.legBlock}>
-              {totalLegs > 1 && (
-                <Eyebrow color={colors.dark.inkMuted}>
-                  LEG {currentLegIndex + 1}/{totalLegs} — {(legFrom.name || 'START').toUpperCase()} → {(legTo.name || 'END').toUpperCase()}
-                </Eyebrow>
-              )}
-              <TouchableOpacity
-                onPress={openInGoogleMaps}
-                testID="ride-navigate-btn"
-                style={styles.navigateBtn}
-                activeOpacity={0.85}
-              >
-                <Feather name="navigation" size={14} color={colors.dark.bg} />
-                <Meta style={{ color: colors.dark.bg, marginLeft: 8 }}>NAVIGATE · GOOGLE MAPS</Meta>
-              </TouchableOpacity>
-            </View>
+        {/* HEADER — slim live pill, close left, spacer right (NEXT/END now
+            lives in the sticky action bar where it has a real hit target). */}
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => router.back()} testID="ride-close-btn" hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+            <Feather name="x" size={20} color={colors.dark.ink} />
+          </TouchableOpacity>
+          <View style={styles.livePill}>
+            <View style={styles.liveDot} />
+            <Meta style={{ color: colors.dark.amber, marginLeft: 6 }}>
+              LIVE · {trip.name.toUpperCase()}
+            </Meta>
+          </View>
+          <View style={{ width: 20 }} />
+        </View>
+
+        {/* PROGRESS — 3px bar with leg ticks. Passed legs amber, current
+            leg's tick is white-and-taller, future ticks dim. Hidden on
+            single-leg trips where ticks would just bookend a flat bar. */}
+        <View style={styles.progressTrack} testID="ride-progress-track">
+          <Animated.View
+            testID="ride-progress-bar"
+            style={[
+              styles.progressBar,
+              {
+                width: progressAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: ['0%', '100%'],
+                }),
+              },
+            ]}
+          />
+          {totalLegs > 1 && legPoints.map((_, i) => {
+            const left = (i / (legPoints.length - 1)) * 100;
+            const passed = i <= currentLegIndex;
+            const isNext = i === currentLegIndex + 1;
+            return (
+              <View
+                key={i}
+                style={[
+                  styles.progressTick,
+                  { left: `${left}%` },
+                  passed && styles.progressTickPassed,
+                  isNext && styles.progressTickCurrent,
+                ]}
+              />
+            );
+          })}
+        </View>
+
+        {/* STATUS RAIL — single mono row replacing three scattered eyebrows.
+            BG dot doubles as the BG-broadcast toggle. WS dot, when failed,
+            doubles as the manual convoy retry. */}
+        <View style={styles.statusRail}>
+          <View style={styles.statusItem}>
+            <View style={[styles.statusRailDot, { backgroundColor: gpsActive ? colors.dark.safe : colors.dark.amber }]} />
+            <Meta style={{ color: colors.dark.inkMuted, marginLeft: 5 }}>GPS</Meta>
+          </View>
+          <Meta style={{ color: colors.dark.rule }}>·</Meta>
+          <TouchableOpacity
+            onPress={convoyState.kind === 'failed' ? retryConvoy : undefined}
+            testID={convoyState.kind === 'failed' ? 'ride-convoy-retry-btn' : undefined}
+            disabled={convoyState.kind !== 'failed'}
+            style={styles.statusItem}
+            activeOpacity={0.7}
+          >
+            <View style={[styles.statusRailDot, { backgroundColor: wsDotColor }]} />
+            <Meta style={{ color: colors.dark.inkMuted, marginLeft: 5 }}>
+              {convoyState.kind === 'failed' ? 'WS · RETRY' : 'WS'}
+            </Meta>
+          </TouchableOpacity>
+          <Meta style={{ color: colors.dark.rule }}>·</Meta>
+          <TouchableOpacity onPress={toggleBackground} testID="ride-bg-toggle" style={styles.statusItem} activeOpacity={0.7}>
+            <View style={[styles.statusRailDot, { backgroundColor: bgActive ? colors.dark.safe : colors.dark.inkMuted }]} />
+            <Meta style={{ color: colors.dark.inkMuted, marginLeft: 5 }}>BG</Meta>
+          </TouchableOpacity>
+          {accuracyM != null && (
+            <>
+              <Meta style={{ color: colors.dark.rule }}>·</Meta>
+              <Meta style={{ color: colors.dark.inkMuted }}>±{Math.round(accuracyM)}M</Meta>
+            </>
           )}
+        </View>
 
-          {/* Map — self + crew live markers, diffed by id inside the WebView.
+        <ScrollView contentContainerStyle={{ paddingBottom: space.lg }}>
+
+          {/* HERO — leg eyebrow + speed numeral + TOP stat in one block.
+              Replaces the old separate leg-block + speedo-block + their
+              respective dividers. The numeral hugs the baseline; KM/H label
+              floats top-right where the eye lands first. */}
+          <View style={styles.hero}>
+            {totalLegs > 1 && legFrom && legTo && (
+              <View style={styles.legEyebrow}>
+                <Meta style={{ color: colors.dark.amber }}>LEG {currentLegIndex + 1}/{totalLegs}</Meta>
+                <Meta style={{ color: colors.dark.inkMuted, marginLeft: 8 }} numberOfLines={1}>
+                  {(legFrom.name || 'START').toUpperCase()} → {(legTo.name || 'END').toUpperCase()}
+                </Meta>
+              </View>
+            )}
+            <Meta style={styles.speedUnit}>KM/H</Meta>
+            <View style={styles.speedRow}>
+              <Text testID="ride-speed-text" style={[type.instrument, styles.speedNum]}>{displaySpeed}</Text>
+              <View style={styles.topStat}>
+                <Meta style={{ color: colors.dark.inkMuted }}>TOP</Meta>
+                <Text style={[type.h1, { color: colors.dark.ink, marginTop: 2 }]}>{Math.round(topSpeed)}</Text>
+              </View>
+            </View>
+          </View>
+
+          {/* MAP — self + crew live markers, diffed by id inside the WebView.
               `routeCoords` is the OSRM road-following polyline; falls back to
-              straight-line waypoint connections when not yet loaded. */}
-          <View style={{ alignItems: 'center', paddingTop: space.sm }}>
+              straight-line waypoint connections when not yet loaded. The map
+              is the rider's primary lookup tool — the redesign keeps it the
+              same height and adds a NAVIGATE pill at bottom-left so launching
+              Google Maps stays in the map's spatial context. */}
+          <View style={styles.mapWrap}>
             <View style={{ width: screenWidth, height: 300 }}>
               <MapView
                 points={allPoints}
@@ -863,87 +912,146 @@ export default function LiveRide() {
                   {followMode === 'self' ? 'FOLLOW · ME' : followMode === 'centroid' ? 'FOLLOW · CREW' : 'FREE PAN'}
                 </Meta>
               </TouchableOpacity>
-            </View>
-          </View>
-
-          {/* Speedometer — current speed + top speed only. Elapsed time and
-              covered distance were dropped from the live HUD; the rider asked
-              for a quieter screen. The values are still computed and sent on
-              ride completion (see endTrip → PATCH actual_distance_km / duration_min). */}
-          <View style={styles.speedoBlock}>
-            <Meta style={{ color: colors.dark.inkMuted }}>SPEED — KM/H</Meta>
-            <Text testID="ride-speed-text" style={[type.instrument, { color: colors.dark.ink, marginTop: 4 }]}>{displaySpeed}</Text>
-            <View style={styles.topRow}>
-              <Meta style={{ color: colors.dark.inkMuted }}>TOP</Meta>
-              <Text style={[type.h2, { color: colors.dark.ink, marginLeft: space.sm }]}>{Math.round(topSpeed)}</Text>
-              <Text style={[type.meta, { color: colors.dark.inkMuted, marginLeft: 4 }]}>KM/H</Text>
-            </View>
-          </View>
-
-          {/* Convoy roster — live from WebSocket. Self is excluded since it's
-              already represented by the speedometer above; this list is "the
-              other riders". Stale = no fresh fix in 30s, marker greys out. */}
-          <View style={styles.darkBlock}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Eyebrow color={colors.dark.inkMuted}>CONVOY — {convoyMembers.filter((m: any) => m.user_id !== myId).length}</Eyebrow>
-              <TouchableOpacity onPress={toggleBackground} testID="ride-bg-toggle">
-                <Meta style={{ color: bgActive ? colors.dark.amber : colors.dark.inkMuted }}>
-                  {bgActive ? '● BG ON' : '○ BG OFF'}
-                </Meta>
-              </TouchableOpacity>
-            </View>
-            <Meta style={{ color: colors.dark.inkMuted, paddingTop: 4 }}>
-              {bgActive
-                ? 'Crew sees you even with screen off.'
-                : 'Tap BG to keep sharing when screen locks.'}
-            </Meta>
-            {convoyMembers.filter((m: any) => m.user_id !== myId).map((m: any) => {
-              const updatedTs = m.updated_at ? Date.parse(m.updated_at) : 0;
-              const stale = updatedTs > 0 && now - updatedTs > STALE_AFTER_MS;
-              const hasFix = m.lat != null && m.lng != null;
-              const status = !hasFix ? 'NO FIX' : stale ? 'STALE' : 'LIVE';
-              const dotColor = !hasFix || stale ? colors.dark.inkMuted : colors.dark.safe;
-              const canPan = hasFix;
-              return (
+              {/* NAVIGATE pill — bottom-left of the map. Ghost-style amber
+                  border (was a filled full-width amber button before the
+                  redesign — the filled treatment competed with the speed
+                  numeral and the action bar). Available to all crew, not
+                  just the organiser, since anyone can want turn-by-turn. */}
+              {legFrom && legTo && (
                 <TouchableOpacity
-                  key={m.user_id}
-                  testID={`convoy-row-${m.user_id}`}
-                  style={[styles.convoyRow, !canPan && { opacity: 0.55 }]}
-                  activeOpacity={canPan ? 0.6 : 1}
-                  disabled={!canPan}
-                  onPress={() => {
-                    // Tap row → fly map to that rider, open their popup.
-                    // Switch follow off so the camera stays parked on them
-                    // for a beat instead of snapping back to self next tick.
-                    if (followMode !== 'free') setFollowMode('free');
-                    panNonceRef.current += 1;
-                    // Append a nonce so the same id tapped twice still
-                    // re-fires the panToMarkerId effect inside MapView.
-                    setPanToId(`${m.user_id}#${panNonceRef.current}`);
-                  }}
+                  onPress={openInGoogleMaps}
+                  testID="ride-navigate-btn"
+                  style={styles.navigatePill}
+                  activeOpacity={0.85}
                 >
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                    <View style={[styles.statusDot, { backgroundColor: dotColor }]} />
-                    <Text style={[type.body, { color: colors.dark.ink }]}>{m.name}</Text>
-                    <Meta style={{ color: colors.dark.inkMuted }}>· {status}</Meta>
-                  </View>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                    <Meta style={{ color: colors.dark.ink }}>{Math.round(m.speed_kmh || 0)} KM/H</Meta>
-                    {canPan && <Feather name="map-pin" size={12} color={colors.dark.inkMuted} />}
-                  </View>
+                  <Feather name="navigation" size={12} color={colors.dark.amber} />
+                  <Meta style={{ color: colors.dark.amber, marginLeft: 6 }}>NAVIGATE · GOOGLE MAPS</Meta>
                 </TouchableOpacity>
-              );
-            })}
-            {convoyMembers.filter((m: any) => m.user_id !== myId).length === 0 && (
-              <Text style={[type.meta, { color: colors.dark.inkMuted, paddingVertical: space.sm }]}>
-                No other riders connected yet.
-              </Text>
-            )}
+              )}
+            </View>
           </View>
+
+          {/* CREW RAIL — collapsed by default. Avatar stack of up to 3
+              riders + an overflow chip; the count summary still shows
+              everyone. Tap to expand into the full per-rider list with
+              speed and pan-to-marker, which is identical to the previous
+              roster section — just hidden behind a tap so the screen
+              doesn't dump four+ rows below the fold. */}
+          <TouchableOpacity
+            onPress={() => setCrewExpanded(v => !v)}
+            style={styles.crewRail}
+            activeOpacity={0.7}
+            testID="ride-crew-rail"
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <View style={styles.avatars}>
+                {otherCrew.slice(0, 3).map((m: any, i: number) => (
+                  <View key={m.user_id} style={[styles.avatar, i > 0 && { marginLeft: -8 }]}>
+                    <Text style={styles.avatarText}>{(m.name || '?').slice(0, 2).toUpperCase()}</Text>
+                  </View>
+                ))}
+                {otherCrew.length > 3 && (
+                  <View style={[styles.avatar, styles.avatarOverflow, { marginLeft: -8 }]}>
+                    <Text style={styles.avatarText}>+{otherCrew.length - 3}</Text>
+                  </View>
+                )}
+                {otherCrew.length === 0 && (
+                  <View style={[styles.avatar, styles.avatarEmpty]}>
+                    <Feather name="users" size={11} color={colors.dark.inkMuted} />
+                  </View>
+                )}
+              </View>
+              <Meta style={{ color: colors.dark.ink, marginLeft: space.md }}>
+                CREW · <Text style={{ color: colors.dark.amber }}>{otherCrew.length} RIDING</Text>
+              </Meta>
+            </View>
+            <Meta style={{ color: colors.dark.inkMuted }}>
+              {crewExpanded ? 'COLLAPSE ▴' : 'EXPAND ▾'}
+            </Meta>
+          </TouchableOpacity>
+
+          {crewExpanded && (
+            <View style={styles.crewList}>
+              {otherCrew.map((m: any) => {
+                const updatedTs = m.updated_at ? Date.parse(m.updated_at) : 0;
+                const stale = updatedTs > 0 && now - updatedTs > STALE_AFTER_MS;
+                const hasFix = m.lat != null && m.lng != null;
+                const status = !hasFix ? 'NO FIX' : stale ? 'STALE' : 'LIVE';
+                const dotColor = !hasFix || stale ? colors.dark.inkMuted : colors.dark.safe;
+                const canPan = hasFix;
+                return (
+                  <TouchableOpacity
+                    key={m.user_id}
+                    testID={`convoy-row-${m.user_id}`}
+                    style={[styles.convoyRow, !canPan && { opacity: 0.55 }]}
+                    activeOpacity={canPan ? 0.6 : 1}
+                    disabled={!canPan}
+                    onPress={() => {
+                      // Tap row → fly map to that rider, open their popup.
+                      // Switch follow off so the camera stays parked on them
+                      // for a beat instead of snapping back to self next tick.
+                      if (followMode !== 'free') setFollowMode('free');
+                      panNonceRef.current += 1;
+                      // Append a nonce so the same id tapped twice still
+                      // re-fires the panToMarkerId effect inside MapView.
+                      setPanToId(`${m.user_id}#${panNonceRef.current}`);
+                    }}
+                  >
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                      <View style={[styles.statusDot, { backgroundColor: dotColor }]} />
+                      <Text style={[type.body, { color: colors.dark.ink }]}>{m.name}</Text>
+                      <Meta style={{ color: colors.dark.inkMuted }}>· {status}</Meta>
+                    </View>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                      <Meta style={{ color: colors.dark.ink }}>{Math.round(m.speed_kmh || 0)} KM/H</Meta>
+                      {canPan && <Feather name="map-pin" size={12} color={colors.dark.inkMuted} />}
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+              {otherCrew.length === 0 && (
+                <Text style={[type.meta, { color: colors.dark.inkMuted, paddingVertical: space.sm }]}>
+                  No other riders connected yet.
+                </Text>
+              )}
+            </View>
+          )}
         </ScrollView>
 
-        {/* SOS button */}
-        <View style={styles.sosWrap}>
+        {/* STICKY ACTION BAR — primary action always in thumb reach.
+            Organiser sees ARRIVED · NEXT LEG until the final leg, then END
+            RIDE. Crew see LEAVE RIDE. SOS hold-to-send pill stacks below;
+            it stays a deliberate hold (not a tap) so a pocket-press can't
+            mis-fire — kept the existing SOSButton component. */}
+        <View style={styles.actionBar}>
+          {isOrganiser ? (
+            <TouchableOpacity
+              onPress={isLastLeg ? endTrip : advanceLeg}
+              testID={isLastLeg ? 'ride-end-btn' : 'ride-next-leg-btn'}
+              style={styles.primaryBtn}
+              activeOpacity={0.85}
+            >
+              <Meta style={styles.primaryBtnText}>
+                {isLastLeg ? 'END RIDE' : 'ARRIVED · NEXT LEG'}
+              </Meta>
+              <Feather
+                name={isLastLeg ? 'check-circle' : 'arrow-right'}
+                size={14}
+                color={colors.dark.bg}
+                style={{ marginLeft: 8 }}
+              />
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              onPress={leaveRide}
+              testID="ride-leave-btn"
+              style={styles.ghostBtn}
+              activeOpacity={0.85}
+            >
+              <Meta style={{ color: colors.dark.amber }}>LEAVE RIDE</Meta>
+            </TouchableOpacity>
+          )}
+          <View style={{ height: space.sm }} />
           <SOSButton onTrigger={triggerSos} testID="live-sos-button" />
         </View>
       </SafeAreaView>
@@ -993,31 +1101,102 @@ export default function LiveRide() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.dark.bg },
   center: { alignItems: 'center', justifyContent: 'center' },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: space.lg, paddingVertical: space.md, borderBottomWidth: 1, borderBottomColor: colors.dark.rule },
-  progressTrack: { height: 2, backgroundColor: 'rgba(217, 102, 6, 0.12)' },
-  progressBar: { height: 2, backgroundColor: colors.dark.amber },
-  speedoBlock: { padding: space.lg, alignItems: 'flex-start', borderBottomWidth: 1, borderBottomColor: colors.dark.rule },
-  topRow: { flexDirection: 'row', alignItems: 'center', marginTop: space.md },
-  legBlock: { paddingHorizontal: space.lg, paddingTop: space.md, paddingBottom: space.sm, gap: space.sm },
-  // Filled amber pill — high contrast against the dark basemap that follows
-  // it. Same vertical rhythm as `darkBlock` so the screen flows top-to-bottom.
-  navigateBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    backgroundColor: colors.dark.amber,
-    paddingVertical: 10, paddingHorizontal: space.lg,
-    borderRadius: 2,
+  // Header — slim, single divider. Live pill is centered between the close
+  // button (left) and a symmetric spacer (right) so the pill stays visually
+  // anchored when the trip name is short.
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: space.lg, paddingVertical: space.sm + 2, borderBottomWidth: 1, borderBottomColor: colors.dark.rule },
+  livePill: { flexDirection: 'row', alignItems: 'center', flex: 1, justifyContent: 'center' },
+  liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.dark.amber },
+
+  // Progress bar — 3px (was 2). Track is amber 12% so the unfilled portion
+  // still reads as "amber's domain" without competing with the filled bar.
+  // Tick marks are absolutely positioned over the track at every leg
+  // boundary; passed legs adopt amber, the next-up leg is white-and-taller,
+  // future ticks stay on the rule color.
+  progressTrack: { height: 3, backgroundColor: 'rgba(217, 102, 6, 0.12)', position: 'relative' },
+  progressBar: { height: 3, backgroundColor: colors.dark.amber },
+  progressTick: { position: 'absolute', top: -1, width: 1, height: 5, backgroundColor: colors.dark.rule, marginLeft: -0.5 },
+  progressTickPassed: { backgroundColor: colors.dark.amber },
+  progressTickCurrent: { backgroundColor: colors.dark.ink, height: 7, top: -2, width: 2, marginLeft: -1 },
+
+  // Status rail — single row of dot+label items separated by middots. All
+  // labels share the muted ink colour; the dot does the colour signaling.
+  statusRail: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingHorizontal: space.lg, paddingVertical: space.sm,
+    borderBottomWidth: 1, borderBottomColor: colors.dark.rule,
   },
-  darkBlock: { padding: space.lg },
-  convoyRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: space.sm, borderBottomWidth: 1, borderBottomColor: colors.dark.rule },
-  statusDot: { width: 8, height: 8, borderRadius: 4 },
-  sosWrap: { padding: space.lg, paddingTop: space.sm, borderTopWidth: 1, borderTopColor: colors.dark.rule },
-  // Manual WS retry pill — visible only on `failed` state, sits under the
-  // status eyebrow so the rider sees it without scrolling.
-  retryPill: {
+  statusItem: { flexDirection: 'row', alignItems: 'center' },
+  statusRailDot: { width: 6, height: 6, borderRadius: 3 },
+
+  // Hero — leg eyebrow stacks above the speed numeral; the numeral hugs
+  // the baseline of the row so the TOP stat (right) aligns to the same
+  // baseline. KM/H label floats top-right of the block.
+  hero: { paddingHorizontal: space.lg, paddingTop: space.md, paddingBottom: space.lg, borderBottomWidth: 1, borderBottomColor: colors.dark.rule, position: 'relative' },
+  legEyebrow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap' },
+  speedUnit: { position: 'absolute', top: space.md, right: space.lg, color: colors.dark.inkMuted },
+  speedRow: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', marginTop: space.sm },
+  speedNum: { color: colors.dark.ink },
+  topStat: { alignItems: 'flex-end', paddingBottom: space.sm },
+
+  // Map wrap — full-bleed, the MapView fixes its own width/height. Bottom
+  // border keeps the visual rhythm with the surrounding rule lines.
+  mapWrap: { borderBottomWidth: 1, borderBottomColor: colors.dark.rule },
+
+  // Navigate pill — bottom-left of the map. Ghost border matches the
+  // follow pill on the opposite corner; the muted dark backdrop keeps it
+  // readable on bright basemap tiles.
+  navigatePill: {
+    position: 'absolute', left: 12, bottom: 12,
     flexDirection: 'row', alignItems: 'center',
-    marginTop: 4, paddingHorizontal: 8, paddingVertical: 3,
+    paddingHorizontal: 10, paddingVertical: 6,
+    backgroundColor: colors.dark.bg + 'd9',
     borderWidth: 1, borderColor: colors.dark.amber, borderRadius: 2,
   },
+
+  // Crew rail — collapsed summary. Avatar stack overlaps via negative
+  // marginLeft so the chips read as a group, not a list.
+  crewRail: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: space.lg, paddingVertical: space.md,
+    borderBottomWidth: 1, borderBottomColor: colors.dark.rule,
+  },
+  avatars: { flexDirection: 'row' },
+  avatar: {
+    width: 24, height: 24, borderRadius: 12,
+    backgroundColor: colors.dark.surface,
+    borderWidth: 2, borderColor: colors.dark.bg,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  avatarText: { fontFamily: fonts.mono, fontSize: 9, letterSpacing: 0.5, color: colors.dark.ink },
+  avatarOverflow: { backgroundColor: colors.dark.rule },
+  avatarEmpty: { borderStyle: 'dashed', borderColor: colors.dark.rule, borderWidth: 1 },
+  // Expanded crew list — same row treatment as the previous roster, just
+  // nested under the rail toggle.
+  crewList: { paddingHorizontal: space.lg, paddingBottom: space.md },
+  convoyRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: space.sm, borderBottomWidth: 1, borderBottomColor: colors.dark.rule },
+  statusDot: { width: 8, height: 8, borderRadius: 4 },
+
+  // Sticky action bar — anchored to the bottom safe area. Primary button
+  // fills width; the SOS hold pill sits below with a small gap.
+  actionBar: {
+    paddingHorizontal: space.lg, paddingTop: space.md, paddingBottom: space.sm,
+    borderTopWidth: 1, borderTopColor: colors.dark.rule,
+    backgroundColor: colors.dark.bg,
+  },
+  primaryBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    backgroundColor: colors.dark.amber,
+    paddingVertical: 14, paddingHorizontal: space.lg,
+    borderRadius: 2,
+  },
+  primaryBtnText: { color: colors.dark.bg, letterSpacing: 1.8 },
+  ghostBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    paddingVertical: 14, paddingHorizontal: space.lg,
+    borderWidth: 1, borderColor: colors.dark.amber, borderRadius: 2,
+  },
+
   // Follow-mode pill — overlaid top-right of the map. Border colour mirrors
   // text colour (amber when locked, muted when free) so the affordance
   // is readable against the dark Carto basemap.
