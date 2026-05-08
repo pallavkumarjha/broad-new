@@ -34,7 +34,7 @@ function avatarUrl(name?: string): string {
 }
 
 export default function Profile() {
-  const { user, signOut, refresh } = useAuth();
+  const { user, refresh } = useAuth();
   const router = useRouter();
   const [badges, setBadges] = useState<any[]>([]);
   const [cityPickerOpen, setCityPickerOpen] = useState(false);
@@ -271,13 +271,6 @@ export default function Profile() {
         {/* FOOTER ---------------------------------------------------------- */}
         <View style={styles.footer}>
           <Meta>{user.email.toUpperCase()}</Meta>
-          <TouchableOpacity
-            testID="profile-signout-btn"
-            onPress={async () => { await signOut(); router.replace('/(auth)/login'); }}
-            hitSlop={8}
-          >
-            <Text style={[type.meta, { color: colors.light.danger }]}>SIGN OUT</Text>
-          </TouchableOpacity>
         </View>
       </ScrollView>
 

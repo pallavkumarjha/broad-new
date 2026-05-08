@@ -10,6 +10,7 @@ export type Settings = {
   crashDetect: boolean;
   shareLiveLocation: boolean;
   haptics: boolean;
+  pushEnabled: boolean;
   units: Units;
 };
 
@@ -18,6 +19,7 @@ const DEFAULTS: Settings = {
   crashDetect: true,
   shareLiveLocation: false,
   haptics: true,
+  pushEnabled: true,
   units: 'metric',
 };
 
