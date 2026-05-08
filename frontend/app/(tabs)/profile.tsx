@@ -7,7 +7,7 @@ import { useAuth } from '../../src/contexts/AuthContext';
 import { api } from '../../src/lib/api';
 import { queryClient } from '../../src/lib/queryClient';
 import { colors, type, space, fonts } from '../../src/theme/tokens';
-import { Eyebrow, Rule, SpecRow, Card, Meta, Button } from '../../src/components/ui';
+import { Eyebrow, Rule, Card, Meta, Button } from '../../src/components/ui';
 
 // Top 20 most-populated Indian cities (city proper, 2024 estimates) + Other.
 const CITIES = [
@@ -170,12 +170,34 @@ export default function Profile() {
         {/* GEAR ------------------------------------------------------------ */}
         <View style={styles.section}>
           <Eyebrow>THE BIKE</Eyebrow>
-          <Card style={{ marginTop: space.sm }}>
-            <SpecRow label="MAKE" value={(user.bike.make || '—').toUpperCase()} />
-            <SpecRow label="MODEL" value={(user.bike.model || '—').toUpperCase()} />
-            <SpecRow label="REGISTRATION" value={(user.bike.registration || '—').toUpperCase()} />
-            <SpecRow label="ODOMETER" value={`${user.bike.odometer_km?.toLocaleString() || 0} KM`} last />
-          </Card>
+          <TouchableOpacity
+            testID="profile-bike-btn"
+            onPress={() => router.push('/profile/edit')}
+            style={styles.prefRow}
+            activeOpacity={0.85}
+          >
+            <View style={{ flex: 1 }}>
+              {user.bike.make || user.bike.model ? (
+                <>
+                  <Text style={[type.h3, { color: colors.light.ink }]} numberOfLines={1}>
+                    {[user.bike.make, user.bike.model].filter(Boolean).join(' ')}
+                  </Text>
+                  <Meta style={{ marginTop: 4 }}>
+                    {[
+                      user.bike.registration ? user.bike.registration.toUpperCase() : null,
+                      `${user.bike.odometer_km?.toLocaleString() || 0} KM`,
+                    ].filter(Boolean).join(' · ')}
+                  </Meta>
+                </>
+              ) : (
+                <>
+                  <Text style={[type.h3, { color: colors.light.ink }]}>Add your bike</Text>
+                  <Meta style={{ marginTop: 4, color: colors.light.amber }}>TAP TO SET MAKE, MODEL, ODOMETER</Meta>
+                </>
+              )}
+            </View>
+            <Feather name="chevron-right" size={20} color={colors.light.inkMuted} />
+          </TouchableOpacity>
         </View>
 
         {/* PREFERENCES ----------------------------------------------------- */}
