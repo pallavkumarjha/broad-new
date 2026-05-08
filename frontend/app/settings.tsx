@@ -253,27 +253,6 @@ export default function Settings() {
             value={settings.units}
             onChange={(v) => update({ units: v as any })}
           />
-          <SegmentRow
-            testID="setting-theme"
-            label="Theme"
-            sub="Dark mode coming soon"
-            options={[
-              { value: 'light', label: 'LIGHT' },
-              { value: 'dark', label: 'DARK', disabled: true },
-            ]}
-            value={'light'}
-            onChange={() => {}}
-          />
-        </SectionRows>
-
-        {/* DATA */}
-        <SectionRows eyebrow="DATA">
-          <NavRow
-            testID="settings-export"
-            label="Export ride history"
-            sub="GPX + CSV bundle (coming soon)"
-            onPress={() => Alert.alert('Coming soon', 'Bulk export will land in the next release.')}
-          />
         </SectionRows>
 
         {/* ABOUT */}

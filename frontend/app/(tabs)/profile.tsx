@@ -7,7 +7,7 @@ import { useAuth } from '../../src/contexts/AuthContext';
 import { api } from '../../src/lib/api';
 import { queryClient } from '../../src/lib/queryClient';
 import { colors, type, space, fonts } from '../../src/theme/tokens';
-import { Eyebrow, Rule, Card, Meta, Button } from '../../src/components/ui';
+import { Eyebrow, Rule, Card, Meta } from '../../src/components/ui';
 
 // Top 20 most-populated Indian cities (city proper, 2024 estimates) + Other.
 const CITIES = [
