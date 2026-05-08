@@ -1081,6 +1081,26 @@ async def save_push_token(body: PushTokenIn, user: dict = Depends(get_current_us
     return {"ok": True}
 
 
+@api.delete("/users/me/push-token")
+async def clear_push_token(user: dict = Depends(get_current_user)):
+    """Remove the stored Expo push token. Called when the user toggles push notifications off in Settings."""
+    await db.users.update_one({"id": user["id"]}, {"$unset": {"expo_push_token": ""}})
+    return {"ok": True}
+
+
+@api.delete("/users/me")
+async def delete_account(user: dict = Depends(get_current_user)):
+    """Hard-delete the authenticated user. Best-effort cascade across user-scoped collections.
+    Trips with crew are intentionally preserved — other users' rides should not vanish because
+    the organiser left. Stale references are tolerated by code that reads sender/organiser docs."""
+    uid = user["id"]
+    await db.refresh_tokens.delete_many({"user_id": uid})
+    await db.notifications.delete_many({"user_id": uid})
+    await db.trip_requests.delete_many({"requested_by": uid})
+    await db.users.delete_one({"id": uid})
+    return {"ok": True}
+
+
 # ---------- Expo push helper ----------
 async def _send_expo_push(tokens: List[str], title: str, body: str, data: dict | None = None) -> None:
     """Best-effort push via Expo's free push API. Never raises — logs failures silently."""
