@@ -4,6 +4,68 @@
 Quiet, considered, analog companion app for motorcycle riders in India. Built around four pillars:
 **Plan · Ride together · SOS · Glovebox**
 
+## V1.2 — Editorial Redesign Pass
+
+End-to-end redesign of Profile, Edit Profile, Settings, and Home using the existing print-editorial design system (Fraunces serif + JetBrains Mono + paper/ink/amber tokens). No real images — SVG illustrations only. Reduced visual chrome (1px rules over Card backgrounds), dramatic typographic scale, and chip-first input where text typing was excessive.
+
+### Profile screen
+- Deterministic dummy avatar (ui-avatars, no upload flow)
+- 72pt Fraunces "instrument" numeral promoted for lifetime distance (design-system scale was defined but unused)
+- Mini-stat strip below hero: trips / highest point / badges, divider-separated
+- Achievements list → horizontal scrollable tile strip (scales past 4 badges without expanding the page)
+- Bike spec Card collapsed into single tappable row (`Make Model` headline + `REG · ODO KM` mono sub) — saved ~210pt vertical
+- Emergency contacts: inline `+ ADD` amber affordance in section head
+- Glovebox: dropped ghost doc chips, tightened to single row
+- Sign-out demoted from footer; canonical home is now Settings · Danger Zone
+
+### Edit Profile screen — chip-first UX
+- Reusable `Chip` primitive (ink-fill active, 1px-rule idle)
+- **Rider type** chip select (`solo / crew / commuter / mixed`) — schema field existed since V1.1 but was never editable
+- Bike make: chip grid of top 15 India makes + `Other → text fallback`
+- Bike model: cascading suggestion chips per selected make + free-text fallback
+- Odometer: numeric input + quick-add chips (`+100 / +500 / +1k / +5k`)
+- Contact relation: chip select (`Spouse / Parent / Sibling / Child / Friend / Crew / Doctor / Other`) — was free text
+- Registration + odometer use mono font for plate / numeral feel
+- Sticky save bar: equal-width Cancel ghost + Save primary
+- **Always-text fields reduced from 7 to 3** (name, registration, contact name + phone)
+
+### Settings screen
+- Card chrome dropped → bare 1px-rule rows divided by section
+- **Identity card** at top (avatar + name + email → tap routes to edit profile)
+- **ACCOUNT** section: edit profile nav, push-notifications toggle
+- **RIDE** kept (background location, crash detection, share live location)
+- **FEEL**: haptics toggle + units segment (KM / MI)
+- **ABOUT**: version badge + Terms / Privacy / Help nav rows (was static text card)
+- **DANGER ZONE**: Sign out + Delete account, both behind native confirm sheets
+- `SettingsContext` extended with `pushEnabled: boolean`
+- Push toggle wired to backend (`DELETE /users/me/push-token` on off)
+
+### Home screen
+- Default hero illustration removed (eats fold) — kept only as zero-rides empty state
+- Lifetime stats row removed (Profile owns it now — single source of truth)
+- Top strip: minimal date + home_city + name + INBOX dot (no floating bell button or numeric badge)
+- New `HorizonStrip` SVG illustration (56pt: cream sky, layered ridges, amber sun + road line) added to `illustrations.tsx`
+- **Brief poster** (when there's a next planned ride): italic light "In" + bold display countdown (spelled out for ≤ 10 days, numeric after) + 22pt "days." + right-side spec stack (KM / CREW)
+- **Active hero** (when a trip is in progress): dark obsidian card + amber progress bar (KM done %) + 3-stat split (KM DONE / KM LEFT / CREW) + DAY {N} pulse derived from `started_at`
+- **Approved-join inline tag** (only when present)
+- **Monthly micro-stat ribbon** ("320 km this month, four trips.") — derived from completed trips with `ended_at` in current month
+- **The Docket**: numbered upcoming list (`01 / 02 / 03` mono) with serif title + right-aligned mono date+dow column. Date pill / crew pill stutter from V1.1 dropped.
+- **Page-break quote**: field note moved between docket and postcard, italic Fraunces between rules
+- **Postcard last ride**: existing `MountainIllus` art + corner PEAK altitude stamp (`elevation_m`) + dashed-rule stat row (KM / HRS · MOVING / CREW). Replaces TripIllus card.
+- Quick actions demoted to two compact rows under em-dash kicker
+- **Colophon** footer ("BROAD · MADE IN INDIA")
+
+### Backend additions
+- `DELETE /users/me/push-token` — clears stored Expo token when user toggles push notifications off
+- `DELETE /users/me` — hard-delete user account. Cascades: refresh tokens, notifications, trip requests. Trips with crew are intentionally preserved (organiser can vanish without erasing other riders' planned rides). Stale references already tolerated by readers.
+- `UpdateUserIn` already accepted `rider_type` in V1.1 — exposed in UI for the first time in V1.2
+
+### Cleanup pass (post-redesign)
+- Dropped `Theme · Dark mode coming soon` SegmentRow stub from Settings
+- Dropped `DATA · Export ride history` placeholder section from Settings
+- Removed orphan `DawnIllus` export from `illustrations.tsx` (zero callers)
+- Removed unused `Button` import from Profile
+
 ## V1.1 — Round 2 Completions (items 7-18 from audit)
 - **Real maps** — Replaced SVG topo placeholder with Leaflet + OSM / CartoDB tiles (iframe on web, WebView on native). Light theme on Plan / Trip Detail / Complete; dark theme on Live Ride & SOS.
 - **Real place search** — New `/api/places/search` proxies Nominatim (OSM). Plan picker now has a search box that returns real India-restricted results; the 9 hardcoded presets are only the initial list.
