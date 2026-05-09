@@ -277,12 +277,6 @@ export default function Home() {
           )}
         </View>
 
-        {/* PAGE-BREAK QUOTE — field note */}
-        <View style={styles.pq}>
-          <Text style={styles.pqQuote}>"{fieldNote.text}"</Text>
-          <Text style={styles.pqBy}>— {fieldNote.by.toUpperCase()}</Text>
-        </View>
-
         {/* POSTCARD — last ride */}
         {lastRide && (
           <View style={styles.section}>
@@ -351,6 +345,12 @@ export default function Home() {
             meta="JOIN CONVOY"
             onPress={() => router.push('/(tabs)/discover')}
           />
+        </View>
+
+                {/* PAGE-BREAK QUOTE — field note */}
+        <View style={styles.pq}>
+          <Text style={styles.pqQuote}>"{fieldNote.text}"</Text>
+          <Text style={styles.pqBy}>— {fieldNote.by.toUpperCase()}</Text>
         </View>
 
         {/* COLOPHON */}
@@ -498,7 +498,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center',
   },
   todayMeta: { fontFamily: fonts.mono, fontSize: 10, letterSpacing: 1.4, color: colors.light.inkMuted, textTransform: 'uppercase' },
-  greetName: { fontFamily: fonts.serifMed, fontSize: 15, color: colors.light.ink, marginTop: 4 },
+  greetName: { fontFamily: fonts.serifMed, fontSize: 24, color: colors.light.ink, marginTop: 4 },
   inbox: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 4, paddingHorizontal: 6 },
   inboxLabel: { fontFamily: fonts.mono, fontSize: 11, letterSpacing: 1.2, color: colors.light.ink, textTransform: 'uppercase' },
   inboxDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.light.amber },

@@ -373,7 +373,7 @@ const styles = StyleSheet.create({
   },
 
   // Safety
-  contactRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: space.md },
+  contactRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   contactRowDivider: { borderBottomWidth: 1, borderBottomColor: colors.light.rule },
 
   // Documents
