@@ -1,6 +1,6 @@
 import React, { useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, Alert } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Stack, useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -47,6 +47,7 @@ function iconFor(type: string | undefined): { name: keyof typeof Feather.glyphMa
 export default function NotificationsScreen() {
   const router = useRouter();
   const qc = useQueryClient();
+  const insets = useSafeAreaInsets();
 
   const list = useQuery<NotificationItem[]>({
     queryKey: ['notifications'],
@@ -125,7 +126,7 @@ export default function NotificationsScreen() {
       <Rule />
 
       <ScrollView
-        contentContainerStyle={{ paddingBottom: space.xxl }}
+        contentContainerStyle={{ paddingBottom: space.xxl + insets.bottom }}
         refreshControl={
           <RefreshControl
             refreshing={list.isRefetching && !list.isLoading}

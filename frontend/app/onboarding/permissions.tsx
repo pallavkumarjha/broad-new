@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform, useWindowDimensions } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import * as Location from 'expo-location';
@@ -13,6 +13,7 @@ type Status = 'pending' | 'granted' | 'denied';
 
 export default function Permissions() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [loc, setLoc] = useState<Status>('pending');
   const [notif, setNotif] = useState<Status>('pending');
   const [crash, setCrash] = useState<Status>('pending');
@@ -93,8 +94,9 @@ export default function Permissions() {
   const { width } = useWindowDimensions();
 
   return (
-    <SafeAreaView style={styles.container} testID="permissions-screen">
-      <ScrollView contentContainerStyle={{ paddingBottom: 140 }}>
+    <View style={styles.container} testID="permissions-screen">
+      <View style={{ height: insets.top, backgroundColor: colors.light.bg }} />
+      <ScrollView contentContainerStyle={{ paddingBottom: 100 + insets.bottom }}>
         <View style={styles.illusWrap}>
           <CompassIllus width={width} height={180} />
         </View>
@@ -146,13 +148,13 @@ export default function Permissions() {
         </View>
       </ScrollView>
 
-      <View style={styles.cta}>
+      <View style={[styles.cta, { paddingBottom: Math.max(insets.bottom, space.lg) }]}>
         <Button label="START RIDING →" onPress={done} testID="perm-continue-btn" />
         <TouchableOpacity onPress={done} style={{ alignItems: 'center', marginTop: space.md }} testID="perm-skip-btn">
           <Meta>SKIP — I'LL ENABLE THESE LATER</Meta>
         </TouchableOpacity>
       </View>
-    </SafeAreaView>
+    </View>
   );
 }
 

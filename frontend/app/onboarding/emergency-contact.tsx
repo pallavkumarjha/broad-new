@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, Alert } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import { colors, type, space, radius } from '../../src/theme/tokens';
@@ -12,6 +12,7 @@ import { queryClient } from '../../src/lib/queryClient';
 
 export default function EmergencyContact() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { refresh } = useAuth();
   const { name, make, model, registration, odometer_km } = useLocalSearchParams<{
     name?: string;
@@ -85,7 +86,8 @@ export default function EmergencyContact() {
   };
 
   return (
-    <SafeAreaView style={styles.container} testID="emergency-contact-screen">
+    <View style={styles.container} testID="emergency-contact-screen">
+      <View style={{ height: insets.top, backgroundColor: colors.light.bg }} />
       <View style={styles.illusWrap}>
         <CompassIllus width={200} height={140} />
       </View>
@@ -99,10 +101,10 @@ export default function EmergencyContact() {
       </View>
       
       <Rule />
-
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
-        <ScrollView contentContainerStyle={{ paddingBottom: 120 }} keyboardShouldPersistTaps="handled">
-          <View style={styles.form}>
+<KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
+  <ScrollView contentContainerStyle={{ paddingBottom: 100 + insets.bottom }} keyboardShouldPersistTaps="handled">
+...
+<View style={[styles.cta, { paddingBottom: Math.max(insets.bottom, space.lg) }]}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: space.sm }}>
               <Eyebrow>EMERGENCY CONTACTS — {contacts.length}</Eyebrow>
               <TouchableOpacity onPress={addContact} testID="add-contact-btn">
@@ -160,7 +162,7 @@ export default function EmergencyContact() {
           <Meta>SKIP FOR NOW</Meta>
         </TouchableOpacity>
       </View>
-    </SafeAreaView>
+    </View>
   );
 }
 

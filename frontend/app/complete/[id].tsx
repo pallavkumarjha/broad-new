@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, ActivityIndicator } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { api } from '../../src/lib/api';
 import { colors, type, space } from '../../src/theme/tokens';
@@ -11,6 +11,7 @@ import { COMPLETE_NOTES, pickFromSeed } from '../../src/lib/content';
 export default function Complete() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [trip, setTrip] = useState<any>(null);
 
   useEffect(() => {
@@ -24,7 +25,7 @@ export default function Complete() {
 
   return (
     <SafeAreaView style={styles.container} testID="trip-complete-screen">
-      <ScrollView contentContainerStyle={{ paddingBottom: space.xxl }}>
+      <ScrollView contentContainerStyle={{ paddingBottom: space.xxl + insets.bottom }}>
         <View style={styles.titleBlock}>
           <Eyebrow>SAFELY HOME — {new Date(trip.ended_at || Date.now()).toDateString().toUpperCase()}</Eyebrow>
           <Text style={[type.display, { color: colors.light.ink, marginTop: space.xs }]}>Ride complete.</Text>

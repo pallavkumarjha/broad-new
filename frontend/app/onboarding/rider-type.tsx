@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import { api } from '../../src/lib/api';
@@ -49,6 +49,7 @@ const OPTIONS: Option[] = [
 
 export default function RiderTypeScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { refresh } = useAuth();
   const [selected, setSelected] = useState<RiderType | null>(null);
   const [busy, setBusy] = useState(false);
@@ -81,7 +82,8 @@ export default function RiderTypeScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container} testID="rider-type-screen">
+    <View style={styles.container} testID="rider-type-screen">
+      <View style={{ height: insets.top, backgroundColor: colors.light.bg }} />
       <View style={styles.header}>
         <Eyebrow>STEP 1 OF 4</Eyebrow>
         <Text style={[type.h1, styles.title]}>What kind of rider are you?</Text>
@@ -91,7 +93,7 @@ export default function RiderTypeScreen() {
       </View>
       <Rule />
 
-      <ScrollView contentContainerStyle={{ paddingBottom: 180 }}>
+      <ScrollView contentContainerStyle={{ paddingBottom: 140 + insets.bottom }}>
         <View style={styles.list}>
           {OPTIONS.map((o) => {
             const active = selected === o.key;
@@ -125,7 +127,7 @@ export default function RiderTypeScreen() {
         </View>
       </ScrollView>
 
-      <View style={styles.cta}>
+      <View style={[styles.cta, { paddingBottom: Math.max(insets.bottom, space.lg) }]}>
         <Button
           label={busy ? 'SAVING…' : 'CONTINUE'}
           onPress={submit}
@@ -141,7 +143,7 @@ export default function RiderTypeScreen() {
           <Meta>SKIP FOR NOW</Meta>
         </TouchableOpacity>
       </View>
-    </SafeAreaView>
+    </View>
   );
 }
 

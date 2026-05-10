@@ -9,6 +9,7 @@ import { RoadIllus } from '../../src/components/illustrations';
 
 export default function BikeInfo() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { name } = useLocalSearchParams<{ name?: string }>();
   const riderName = name || 'Rider';
   
@@ -45,7 +46,8 @@ export default function BikeInfo() {
   };
 
   return (
-    <SafeAreaView style={styles.container} testID="bike-info-screen">
+    <View style={styles.container} testID="bike-info-screen">
+      <View style={{ height: insets.top, backgroundColor: colors.light.bg }} />
       <View style={styles.illusWrap}>
         <RoadIllus width={200} height={140} />
       </View>
@@ -59,10 +61,10 @@ export default function BikeInfo() {
       </View>
       
       <Rule />
-
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
-        <ScrollView contentContainerStyle={{ paddingBottom: 120 }} keyboardShouldPersistTaps="handled">
-          <View style={styles.form}>
+<KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
+  <ScrollView contentContainerStyle={{ paddingBottom: 100 + insets.bottom }} keyboardShouldPersistTaps="handled">
+...
+<View style={[styles.cta, { paddingBottom: Math.max(insets.bottom, space.lg) }]}>
             <Card>
               <Eyebrow style={{ marginBottom: 4 }}>MAKE</Eyebrow>
               <TextInput
@@ -113,7 +115,7 @@ export default function BikeInfo() {
           <Meta>SKIP FOR NOW</Meta>
         </TouchableOpacity>
       </View>
-    </SafeAreaView>
+    </View>
   );
 }
 

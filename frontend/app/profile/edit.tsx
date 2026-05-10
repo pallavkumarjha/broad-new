@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Alert, KeyboardAvoidingView, Platform } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import { useAuth, RiderType } from '../../src/contexts/AuthContext';
@@ -84,6 +84,7 @@ function ChipGroup({ children }: { children: React.ReactNode }) {
 export default function ProfileEdit() {
   const { user, refresh } = useAuth();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
 
   const [name, setName] = useState(user?.name || '');
   const [riderType, setRiderType] = useState<RiderType | null>(user?.rider_type || null);
@@ -134,7 +135,8 @@ export default function ProfileEdit() {
   };
 
   return (
-    <SafeAreaView style={styles.container} testID="profile-edit-screen">
+    <View style={styles.container} testID="profile-edit-screen">
+      <View style={{ height: insets.top, backgroundColor: colors.light.bg }} />
       {/* Editorial header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} testID="edit-back-btn" hitSlop={10}>
@@ -146,7 +148,7 @@ export default function ProfileEdit() {
       <Rule />
 
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
-        <ScrollView contentContainerStyle={{ paddingBottom: 140 }} keyboardShouldPersistTaps="handled">
+        <ScrollView contentContainerStyle={{ paddingBottom: 100 + insets.bottom }} keyboardShouldPersistTaps="handled">
 
           {/* IDENTITY ----------------------------------------------------- */}
           <View style={styles.section}>
@@ -344,7 +346,7 @@ export default function ProfileEdit() {
       </KeyboardAvoidingView>
 
       {/* STICKY SAVE BAR */}
-      <View style={styles.cta}>
+      <View style={[styles.cta, { paddingBottom: Math.max(insets.bottom, space.lg) }]}>
         <View style={{ flex: 1 }}>
           <Button label="CANCEL" variant="ghost" onPress={() => router.back()} testID="edit-cancel-btn" />
         </View>
@@ -353,7 +355,7 @@ export default function ProfileEdit() {
           <Button label="SAVE" onPress={submit} loading={busy} testID="edit-save-btn" />
         </View>
       </View>
-    </SafeAreaView>
+    </View>
   );
 }
 

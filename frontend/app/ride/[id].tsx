@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Alert, StatusBar, Platform, Animated, useWindowDimensions, Linking } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import * as Location from 'expo-location';
@@ -57,6 +57,7 @@ const STALE_AFTER_MS = 30_000;
 export default function LiveRide() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { settings } = useSettings();
   const { user: currentUser } = useAuth();
   const [trip, setTrip] = useState<any>(null);
@@ -1023,7 +1024,7 @@ export default function LiveRide() {
             RIDE. Crew see LEAVE RIDE. SOS hold-to-send pill stacks below;
             it stays a deliberate hold (not a tap) so a pocket-press can't
             mis-fire — kept the existing SOSButton component. */}
-        <View style={styles.actionBar}>
+        <View style={[styles.actionBar, { paddingBottom: Math.max(insets.bottom, space.sm) }]}>
           {isOrganiser ? (
             <TouchableOpacity
               onPress={isLastLeg ? endTrip : advanceLeg}

@@ -1,6 +1,6 @@
 import React, { useCallback, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import { useAuth } from '../../src/contexts/AuthContext';
@@ -27,6 +27,7 @@ type Role = 'organiser' | 'crew' | 'requester' | 'stranger' | 'declined';
 export default function TripDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const [trip, setTrip] = useState<any>(null);
   const [requests, setRequests] = useState<any[]>([]); // organiser inbox
@@ -267,7 +268,8 @@ export default function TripDetail() {
   ) : <View style={{ width: 20 }} />;
 
   return (
-    <SafeAreaView style={styles.container} testID="trip-detail-screen">
+    <View style={styles.container} testID="trip-detail-screen">
+      <View style={{ height: insets.top, backgroundColor: colors.light.bg }} />
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} testID="trip-back-btn"><Feather name="arrow-left" size={22} color={colors.light.ink} /></TouchableOpacity>
         <Eyebrow>
@@ -278,7 +280,7 @@ export default function TripDetail() {
         {headerRight}
       </View>
       <Rule />
-      <ScrollView contentContainerStyle={{ paddingBottom: 180 }}>
+      <ScrollView contentContainerStyle={{ paddingBottom: 140 + insets.bottom }}>
         <View style={styles.titleBlock}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
             {trip.planned_date ? (
@@ -434,10 +436,10 @@ export default function TripDetail() {
         ) : null}
       </ScrollView>
 
-      <View style={styles.cta}>
+      <View style={[styles.cta, { paddingBottom: Math.max(insets.bottom, space.lg) }]}>
         {renderCta()}
       </View>
-    </SafeAreaView>
+    </View>
   );
 }
 

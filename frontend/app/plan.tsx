@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ActivityIndicator, Animated, Easing } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import { api } from '../src/lib/api';
@@ -48,6 +48,7 @@ const relativeDateLabel = (d: Date) => {
 
 export default function Plan() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [name, setName] = useState('Weekend Run');
   const [start, setStart] = useState(PRESETS[0]);
   const [end, setEnd] = useState(PRESETS[2]);
@@ -226,7 +227,7 @@ export default function Plan() {
       </View>
       <Rule />
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
-        <ScrollView contentContainerStyle={{ paddingBottom: space.xxl }}>
+        <ScrollView contentContainerStyle={{ paddingBottom: space.xxl + insets.bottom }}>
           <View style={{ alignItems: 'center', paddingVertical: space.md, backgroundColor: colors.light.surface }}>
             <MapView points={allPoints} width={360} height={220} />
           </View>

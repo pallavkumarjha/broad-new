@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, Animated, StatusBar } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { api, describeError } from '../../src/lib/api';
 import { useAuth } from '../../src/contexts/AuthContext';
@@ -13,6 +13,7 @@ const fmtCoord = (value: number, pos: string, neg: string) => `${Math.abs(value)
 export default function SOS() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const [event, setEvent] = useState<any>(null);
   const [resolving, setResolving] = useState(false);
@@ -152,7 +153,7 @@ export default function SOS() {
           ) : null}
         </View>
 
-        <View style={styles.footer}>
+        <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, space.lg) }]}>
           {isSender ? (
             <SafeButton onConfirm={resolve} busy={resolving} />
           ) : (

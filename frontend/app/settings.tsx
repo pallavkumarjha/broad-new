@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Switch, TouchableOpacity, Alert, Linking, Image, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Switch, TouchableOpacity, Alert, Linking, Image, ActivityIndicator, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
@@ -116,15 +116,20 @@ export default function Settings() {
   const router = useRouter();
   const { user, signOut } = useAuth();
   const { settings, update } = useSettings();
+  const insets = useSafeAreaInsets();
   const [busyDelete, setBusyDelete] = useState(false);
 
   const togglePush = async (next: boolean) => {
     update({ pushEnabled: next });
-    try {
-      if (!next) await api.delete('/users/me/push-token');
-      // Re-enable: the next app launch will re-register via AuthContext.
-    } catch {
-      // Don't block the toggle on a network failure — local state is still updated.
+    if (!next && Platform.OS !== 'web') {
+      try {
+        const Notifications = await import('expo-notifications');
+        const projectId = Constants.expoConfig?.extra?.eas?.projectId || Constants.expoConfig?.owner;
+        const tokenData = await Notifications.getExpoPushTokenAsync({ projectId });
+        await api.delete('/users/me/push-token', { data: { token: tokenData.data } });
+      } catch (err) {
+        console.warn('Failed to unregister push token:', err);
+      }
     }
   };
 
@@ -175,7 +180,7 @@ export default function Settings() {
       </View>
       <Rule />
 
-      <ScrollView contentContainerStyle={{ paddingBottom: space.xxl }}>
+      <ScrollView contentContainerStyle={{ paddingBottom: space.xxl + insets.bottom }}>
 
         {/* Identity card */}
         {user ? (

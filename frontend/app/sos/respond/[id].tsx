@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, Animated, StatusBar, ActivityIndicator } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { api, describeError } from '../../../src/lib/api';
 import { colors, type, space } from '../../../src/theme/tokens';
@@ -11,6 +11,7 @@ const fmtCoord = (value: number, pos: string, neg: string) => `${Math.abs(value)
 export default function SosResponder() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [event, setEvent] = useState<any>(null);
   const [err, setErr] = useState('');
   const blink = useRef(new Animated.Value(0.3)).current;
@@ -103,7 +104,7 @@ export default function SosResponder() {
           )}
         </View>
 
-        <View style={styles.footer}>
+        <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, space.lg) }]}>
           <Button dark variant="ghost" label="BACK TO RIDE" onPress={() => router.back()} testID="sos-respond-back-btn" />
         </View>
       </SafeAreaView>

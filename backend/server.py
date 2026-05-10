@@ -16,6 +16,13 @@ from typing import List, Optional, Literal
 import bcrypt
 import jwt as pyjwt
 import httpx
+from exponent_server_sdk import (
+    DeviceNotRegisteredError,
+    PushClient,
+    PushMessage,
+    PushServerError,
+    PushTicketEntries,
+)
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, WebSocket, WebSocketDisconnect
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
@@ -166,6 +173,7 @@ class UserPublic(BaseModel):
     emergency_contacts: List[EmergencyContact] = Field(default_factory=list)
     stats: UserStats = Field(default_factory=UserStats)
     home_city: Optional[str] = None  # e.g. "Bangalore", "Manali" — filters Discover trips
+    expo_push_tokens: List[str] = Field(default_factory=list)
     # Self-identified rider archetype, captured in onboarding step 1.
     # Used by Discover/Home to tune defaults (commuter sees city rides,
     # solo sees touring). Optional — old users have nothing set; UI falls
@@ -363,6 +371,7 @@ def to_public(u: dict) -> UserPublic:
         emergency_contacts=[EmergencyContact(**c) for c in (u.get("emergency_contacts") or [])],
         stats=UserStats(**(u.get("stats") or {})),
         home_city=u.get("home_city"),
+        expo_push_tokens=u.get("expo_push_tokens") or [],
         rider_type=u.get("rider_type"),
         created_at=u.get("created_at", now_iso()),
     )
@@ -822,19 +831,123 @@ async def _persist_notifications(user_ids: List[str], title: str, body: str, dat
         logger.warning("Notification persist failed: %s", exc)
 
 
+async def process_push_receipts() -> None:
+    """Recurring background task to verify delivery of sent pushes.
+    Checks receipts from Expo for any tickets older than 15 minutes,
+    prunes dead tokens, and deletes the tickets from DB.
+    """
+    client = PushClient()
+    while True:
+        try:
+            # 1. Fetch tickets older than 15 minutes (gives Expo time to generate receipts)
+            threshold = (datetime.now(timezone.utc) - timedelta(minutes=15)).isoformat()
+            cursor = db.push_tickets.find({"created_at": {"$lt": threshold}}).limit(200)
+            tickets = await cursor.to_list(200)
+            if not tickets:
+                await asyncio.sleep(600) # Nothing to do; sleep for 10 mins
+                continue
+
+            # 2. Extract ticket IDs and map them back to tokens
+            ticket_ids = [t["ticket_id"] for t in tickets]
+            ticket_map = {t["ticket_id"]: t["token"] for t in tickets}
+
+            # 3. Request receipts from Expo (SDK handles chunking internally if we use it,
+            # but we'll manually chunk to 100 to stay within MongoDB/FastAPI memory limits).
+            try:
+                receipts = client.get_push_notification_receipts(ticket_ids)
+            except Exception as exc:
+                logger.warning("Failed to fetch push receipts: %s", exc)
+                await asyncio.sleep(300)
+                continue
+
+            # 4. Prune dead tokens
+            dead_tokens = []
+            for tid, receipt in receipts.items():
+                if receipt.get("status") == "error":
+                    details = receipt.get("details") or {}
+                    # DeviceNotRegistered means the token is no longer valid
+                    if details.get("error") == "DeviceNotRegistered":
+                        dead_tokens.append(ticket_map.get(tid))
+
+            if dead_tokens:
+                dead_tokens = list(set(filter(None, dead_tokens)))
+                # Remove these tokens from EVERY user document that has them
+                await db.users.update_many(
+                    {"expo_push_tokens": {"$in": dead_tokens}},
+                    {"$pull": {"expo_push_tokens": {"$in": dead_tokens}}}
+                )
+                logger.info("Pruned %d dead push tokens", len(dead_tokens))
+
+            # 5. Cleanup processed tickets
+            await db.push_tickets.delete_many({"ticket_id": {"$in": ticket_ids}})
+
+        except Exception as exc:
+            logger.warning("Error in push receipt processor: %s", exc)
+
+        await asyncio.sleep(900) # Run every 15 minutes
+
+
 async def _push_to_users(user_ids: List[str], title: str, body: str, data: dict | None = None) -> None:
-    """Persist + push to the given user ids. Persistence runs even if no push token exists,
-    so the in-app inbox still shows the notification when the user opens the app."""
+    """Fetch all tokens for the given user IDs and send pushes via Expo.
+    Persists in-app notifications first, then hands off tokens to the SDK client.
+    """
     if not user_ids:
         return
+    # 1. In-app inbox persistence
     await _persist_notifications(user_ids, title, body, data)
+
+    # 2. Gather all unique tokens for these users
     cursor = db.users.find(
-        {"id": {"$in": user_ids}, "expo_push_token": {"$exists": True, "$ne": ""}},
-        {"_id": 0, "expo_push_token": 1},
+        {"id": {"$in": user_ids}, "expo_push_tokens": {"$exists": True, "$ne": []}},
+        {"_id": 0, "expo_push_tokens": 1}
     )
-    members = await cursor.to_list(50)
-    tokens = [m["expo_push_token"] for m in members if m.get("expo_push_token")]
-    await _send_expo_push(tokens, title, body, data)
+    members = await cursor.to_list(100)
+    all_tokens = []
+    for m in members:
+        all_tokens.extend(m.get("expo_push_tokens", []))
+
+    if all_tokens:
+        import asyncio
+        asyncio.ensure_future(_send_expo_push(list(set(all_tokens)), title, body, data))
+
+
+async def _send_expo_push(tokens: List[str], title: str, body: str, data: dict | None = None) -> None:
+    """Send pushes via the official Exponent SDK. Handles chunking and ticket persistence."""
+    if not tokens:
+        return
+
+    messages = [
+        PushMessage(to=t, title=title, body=body, data=data or {}, sound="default")
+        for t in tokens
+    ]
+
+    client = PushClient()
+    try:
+        # The SDK's publish method automatically chunks the messages (default 100)
+        # and returns a list of PushTicket objects.
+        responses = client.publish_multiple(messages)
+
+        # Save tickets to MongoDB so the background receipt-processor can verify
+        # delivery and prune dead tokens later.
+        tickets = []
+        created_at = now_iso()
+        for i, response in enumerate(responses):
+            # ticket_id is missing if the message failed early (e.g. invalid token shape)
+            if response.id:
+                tickets.append({
+                    "id": str(uuid.uuid4()),
+                    "ticket_id": response.id,
+                    "token": tokens[i],
+                    "created_at": created_at
+                })
+
+        if tickets:
+            await db.push_tickets.insert_many(tickets)
+
+    except PushServerError as exc:
+        logger.warning("Expo PushServerError: %s", exc)
+    except Exception as exc:
+        logger.warning("Expo push exception: %s", exc)
 
 
 @api.post("/trips/{trip_id}/request-join", response_model=TripRequest)
@@ -1073,18 +1186,23 @@ async def my_trip_requests(user: dict = Depends(get_current_user)):
 
 
 # ---------- Convoy (mocked) ----------
-# ---------- Push token ----------
 @api.post("/users/me/push-token")
 async def save_push_token(body: PushTokenIn, user: dict = Depends(get_current_user)):
-    """Store the Expo push token for this device/user. Upsert — safe to call on every app launch."""
-    await db.users.update_one({"id": user["id"]}, {"$set": {"expo_push_token": body.token.strip()}})
+    """Store the Expo push token for this device/user. Uses $addToSet for multi-device support."""
+    await db.users.update_one(
+        {"id": user["id"]},
+        {"$addToSet": {"expo_push_tokens": body.token.strip()}}
+    )
     return {"ok": True}
 
 
 @api.delete("/users/me/push-token")
-async def clear_push_token(user: dict = Depends(get_current_user)):
-    """Remove the stored Expo push token. Called when the user toggles push notifications off in Settings."""
-    await db.users.update_one({"id": user["id"]}, {"$unset": {"expo_push_token": ""}})
+async def clear_push_token(body: PushTokenIn, user: dict = Depends(get_current_user)):
+    """Remove a specific Expo push token. Called when the user toggles push notifications off or logs out."""
+    await db.users.update_one(
+        {"id": user["id"]},
+        {"$pull": {"expo_push_tokens": body.token.strip()}}
+    )
     return {"ok": True}
 
 
@@ -1099,25 +1217,6 @@ async def delete_account(user: dict = Depends(get_current_user)):
     await db.trip_requests.delete_many({"requested_by": uid})
     await db.users.delete_one({"id": uid})
     return {"ok": True}
-
-
-# ---------- Expo push helper ----------
-async def _send_expo_push(tokens: List[str], title: str, body: str, data: dict | None = None) -> None:
-    """Best-effort push via Expo's free push API. Never raises — logs failures silently."""
-    if not tokens:
-        return
-    messages = [{"to": t, "title": title, "body": body, "data": data or {}, "sound": "default"} for t in tokens if t]
-    try:
-        async with httpx.AsyncClient(timeout=8) as c:
-            r = await c.post(
-                "https://exp.host/--/api/v2/push/send",
-                json=messages,
-                headers={"Accept": "application/json", "Accept-Encoding": "gzip, deflate", "Content-Type": "application/json"},
-            )
-            if r.status_code != 200:
-                logger.warning("Expo push failed: %s %s", r.status_code, r.text[:200])
-    except Exception as exc:
-        logger.warning("Expo push exception: %s", exc)
 
 
 async def _notify_sos_crew(sos_doc: dict, sender_name: str) -> None:
@@ -1664,6 +1763,20 @@ app.add_middleware(
 
 # ---------- Seed ----------
 async def seed():
+    # ---- Migration: legacy expo_push_token (string) -> expo_push_tokens (array) ----
+    # This runs once on boot to ensure no user is left behind after the 1.3 schema change.
+    cursor = db.users.find({"expo_push_token": {"$exists": True, "$type": "string"}})
+    async for user in cursor:
+        token = user.get("expo_push_token")
+        if token:
+            await db.users.update_one(
+                {"id": user["id"]},
+                {
+                    "$addToSet": {"expo_push_tokens": token},
+                    "$unset": {"expo_push_token": ""}
+                }
+            )
+
     # ---- Index audit (2026-04) ----
     # Every authenticated request hits users.find_one({"id": ...}) via
     # get_current_user, and every trip detail/mutation hits
@@ -1706,6 +1819,10 @@ async def seed():
     await db.notifications.create_index("id", unique=True)
     await db.notifications.create_index([("user_id", 1), ("created_at", -1)])
     await db.notifications.create_index([("user_id", 1), ("read", 1)])
+    # Push tickets for receipt processing
+    await db.push_tickets.create_index("id", unique=True)
+    await db.push_tickets.create_index("ticket_id")
+    await db.push_tickets.create_index("created_at")
 
     admin_email = os.environ.get("ADMIN_EMAIL", "rider@broad.app")
     admin_password = os.environ.get("ADMIN_PASSWORD")
@@ -1868,6 +1985,7 @@ async def seed():
 @app.on_event("startup")
 async def on_start():
     await seed()
+    asyncio.ensure_future(process_push_receipts())
 
 
 @app.on_event("shutdown")

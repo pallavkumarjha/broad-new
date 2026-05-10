@@ -3,7 +3,7 @@ import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   TextInput, Platform, Alert, KeyboardAvoidingView,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import * as LocalAuthentication from 'expo-local-authentication';
@@ -107,6 +107,7 @@ type ScreenState = 'locked' | 'unlocking' | 'unlocked';
 
 export default function Glovebox() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
 
   const [screen, setScreen] = useState<ScreenState>('locked');
   const [docs, setDocs]     = useState<AllDocs>(EMPTY_DOCS);
@@ -296,7 +297,7 @@ export default function Glovebox() {
       </View>
       <Rule />
 
-      <ScrollView contentContainerStyle={{ paddingBottom: space.xxl }}>
+      <ScrollView contentContainerStyle={{ paddingBottom: space.xxl + insets.bottom }}>
         <View style={{ padding: space.lg }}>
           <Text style={[type.h1, { color: colors.light.ink }]}>Your documents.</Text>
           <Text style={[type.body, { color: colors.light.inkMuted, marginTop: space.xs }]}>

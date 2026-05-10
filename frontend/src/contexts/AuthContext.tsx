@@ -41,11 +41,17 @@ async function _registerPushToken(): Promise<void> {
       finalStatus = s;
     }
     if (finalStatus !== 'granted') return;
-    const projectId = Constants.expoConfig?.extra?.eas?.projectId as string | undefined;
+    
+    // EAS Project ID is required for push notifications in SDK 50+
+    const projectId = Constants.expoConfig?.extra?.eas?.projectId || 
+                     Constants.expoConfig?.owner; 
+    
     const tokenData = await Notifications.getExpoPushTokenAsync({ projectId });
+    // Backend uses $addToSet — safe to call on every app launch.
     await api.post('/users/me/push-token', { token: tokenData.data });
-  } catch {
+  } catch (err) {
     // Silently swallow — push is opt-in, never block auth flow
+    console.warn('Push registration failed:', err);
   }
 }
 
@@ -59,8 +65,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const { data } = await api.get('/auth/me');
       setUser(data);
-      // Re-register push token on every app launch — handles permission grants,
-      // device changes, and token rotation. Backend upserts so it's safe to spam.
       _registerPushToken();
     } catch {
       await storage.deleteItem(TOKEN_KEY);
@@ -78,7 +82,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       await storage.setItem(TOKEN_KEY, data.token);
       if (data.refresh_token) await storage.setItem(REFRESH_TOKEN_KEY, data.refresh_token);
       setUser(data.user);
-      _registerPushToken(); // fire-and-forget
+      _registerPushToken();
     } catch (e: any) {
       throw new Error(describeError(e, 'Login failed'));
     }
@@ -90,7 +94,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       await storage.setItem(TOKEN_KEY, data.token);
       if (data.refresh_token) await storage.setItem(REFRESH_TOKEN_KEY, data.refresh_token);
       setUser(data.user);
-      _registerPushToken(); // fire-and-forget
+      _registerPushToken();
     } catch (e: any) {
       throw new Error(describeError(e, 'Sign up failed'));
     }
@@ -101,6 +105,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const refreshToken = await storage.getItem(REFRESH_TOKEN_KEY);
       if (refreshToken) await api.post('/auth/logout', { refresh_token: refreshToken });
+      
+      // Also unregister this device's push token so we stop sending pushes to it
+      if (Platform.OS !== 'web') {
+        const Notifications = await import('expo-notifications');
+        const projectId = Constants.expoConfig?.extra?.eas?.projectId || Constants.expoConfig?.owner;
+        const tokenData = await Notifications.getExpoPushTokenAsync({ projectId });
+        await api.delete('/users/me/push-token', { data: { token: tokenData.data } });
+      }
     } catch {}
     await storage.deleteItem(TOKEN_KEY);
     await storage.deleteItem(REFRESH_TOKEN_KEY);

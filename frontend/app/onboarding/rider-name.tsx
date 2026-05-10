@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import { colors, type, space, radius } from '../../src/theme/tokens';
@@ -9,6 +9,7 @@ import { HelmetIllus } from '../../src/components/illustrations';
 
 export default function RiderName() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -27,7 +28,8 @@ export default function RiderName() {
   };
 
   return (
-    <SafeAreaView style={styles.container} testID="rider-name-screen">
+    <View style={styles.container} testID="rider-name-screen">
+      <View style={{ height: insets.top, backgroundColor: colors.light.bg }} />
       <View style={styles.illusWrap}>
         <HelmetIllus width={200} height={140} />
       </View>
@@ -58,13 +60,13 @@ export default function RiderName() {
         </View>
       </KeyboardAvoidingView>
 
-      <View style={styles.cta}>
+      <View style={[styles.cta, { paddingBottom: Math.max(insets.bottom, space.lg) }]}>
         <Button label="CONTINUE" onPress={submit} loading={busy} testID="rider-name-continue-btn" />
         <TouchableOpacity onPress={skip} style={{ alignItems: 'center', marginTop: space.md }} testID="rider-name-skip-btn">
           <Meta>SKIP FOR NOW</Meta>
         </TouchableOpacity>
       </View>
-    </SafeAreaView>
+    </View>
   );
 }
 

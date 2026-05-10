@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, useWindowDimensions } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, Link } from 'expo-router';
 import { useAuth } from '../../src/contexts/AuthContext';
 import { colors, type, space, radius } from '../../src/theme/tokens';
@@ -10,6 +10,7 @@ import { HelmetIllus } from '../../src/components/illustrations';
 export default function Login() {
   const { signIn } = useAuth();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [err, setErr] = useState('');
@@ -35,7 +36,7 @@ export default function Login() {
         <HelmetIllus width={width} height={220} />
       </View>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
-        <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+        <ScrollView contentContainerStyle={[styles.scroll, { paddingBottom: space.lg + insets.bottom }]} keyboardShouldPersistTaps="handled">
           <View>
             <Eyebrow>SIGN IN — RETURNING RIDER</Eyebrow>
             <Text style={[type.h1, { color: colors.light.ink, marginTop: space.sm }]}>Welcome back.</Text>
