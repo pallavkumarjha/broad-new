@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
+import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../../src/contexts/AuthContext';
 import { api } from '../../src/lib/api';
 import { queryClient } from '../../src/lib/queryClient';
@@ -11,10 +12,13 @@ import { queryClient } from '../../src/lib/queryClient';
 // the shared React Query cache so Home/Trips/Discover show fresh data as soon
 // as the user navigates back. Using invalidate instead of refetch — any screen
 // currently observing the key will refetch on-demand.
-const invalidateTripCaches = () => {
+const invalidateTripCaches = (id?: string) => {
   queryClient.invalidateQueries({ queryKey: ['trips', 'mine'] });
   queryClient.invalidateQueries({ queryKey: ['trips', 'discover'] });
   queryClient.invalidateQueries({ queryKey: ['users', 'me', 'trip-requests'] });
+  if (id) {
+    queryClient.invalidateQueries({ queryKey: ['trips', 'detail', id] });
+  }
 };
 import { colors, type, space, radius } from '../../src/theme/tokens';
 import { Eyebrow, Rule, SpecRow, Button, Meta, Card } from '../../src/components/ui';
@@ -29,34 +33,37 @@ export default function TripDetail() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
-  const [trip, setTrip] = useState<any>(null);
-  const [requests, setRequests] = useState<any[]>([]); // organiser inbox
-  const [myRequest, setMyRequest] = useState<any>(null);
+  const tripQuery = useQuery<any>({
+    queryKey: ['trips', 'detail', id],
+    queryFn: async () => (await api.get(`/trips/${id}`)).data,
+    enabled: !!id,
+  });
+  const trip = tripQuery.data;
+  const isOrganiser = !!user && !!trip && trip.user_id === user.id;
+  const requestsQuery = useQuery<any[]>({
+    queryKey: ['trips', 'detail', id, 'requests'],
+    queryFn: async () => (await api.get(`/trips/${id}/requests`)).data,
+    enabled: !!id && isOrganiser,
+  });
+  const myReqsQuery = useQuery<any[]>({
+    queryKey: ['users', 'me', 'trip-requests'],
+    queryFn: async () => (await api.get('/users/me/trip-requests')).data,
+    enabled: !!user && !!trip && !isOrganiser,
+  });
+  const requests: any[] = requestsQuery.data || [];
+  const myRequest: any = (myReqsQuery.data || []).find((r: any) => r.trip_id === id) || null;
+
   const [busy, setBusy] = useState(false);
-  const [acting, setActing] = useState<string | null>(null); // request-id being acted on
+  const [acting, setActing] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    try {
-      const { data } = await api.get(`/trips/${id}`);
-      setTrip(data);
-      const isOrganiser = user && data.user_id === user.id;
-      // Organiser sees the inbox
-      if (isOrganiser) {
-        try {
-          const { data: reqs } = await api.get(`/trips/${id}/requests`);
-          setRequests(reqs);
-        } catch { setRequests([]); }
-      }
-      // Anyone else: check if they have a request on this trip
-      if (user && !isOrganiser) {
-        try {
-          const { data: mine } = await api.get('/users/me/trip-requests');
-          const found = (mine || []).find((r: any) => r.trip_id === id);
-          setMyRequest(found || null);
-        } catch { setMyRequest(null); }
-      }
-    } catch {}
-  }, [id, user]);
+    // Refetch all three on focus — prefetched data still gets revalidated.
+    await Promise.all([
+      tripQuery.refetch(),
+      isOrganiser ? requestsQuery.refetch() : Promise.resolve(),
+      !isOrganiser ? myReqsQuery.refetch() : Promise.resolve(),
+    ]);
+  }, [tripQuery, requestsQuery, myReqsQuery, isOrganiser]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
@@ -65,7 +72,6 @@ export default function TripDetail() {
   }
 
   const allPoints = [trip.start, ...(trip.waypoints || []), trip.end];
-  const isOrganiser = !!user && trip.user_id === user.id;
   const isCrew = !!user && (trip.crew_ids || []).includes(user.id);
   const pendingMine = myRequest && myRequest.status === 'pending';
   const declinedMine = myRequest && myRequest.status === 'declined';
@@ -105,8 +111,7 @@ export default function TripDetail() {
   const requestJoin = async () => {
     setBusy(true);
     try {
-      const { data } = await api.post(`/trips/${id}/request-join`, { note: '' });
-      setMyRequest(data);
+      await api.post(`/trips/${id}/request-join`, { note: '' });
       invalidateTripCaches();
     } catch (e: any) {
       Alert.alert('Could not send request', e?.response?.data?.detail || e?.message || '');
@@ -120,8 +125,7 @@ export default function TripDetail() {
       { text: 'Withdraw', style: 'destructive', onPress: async () => {
         setBusy(true);
         try {
-          const { data } = await api.post(`/trips/${id}/requests/${myRequest.id}/cancel`);
-          setMyRequest(data);
+          await api.post(`/trips/${id}/requests/${myRequest.id}/cancel`);
           invalidateTripCaches();
         } catch (e: any) {
           Alert.alert('Could not withdraw', e?.response?.data?.detail || e?.message || '');

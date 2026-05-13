@@ -1,5 +1,6 @@
-import React, { useState, useMemo } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, useWindowDimensions, Alert } from 'react-native';
+import React, { useState, useMemo, memo, useCallback } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, RefreshControl, useWindowDimensions, Alert } from 'react-native';
+import { FlashList } from '@shopify/flash-list';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
@@ -19,6 +20,88 @@ const formatTripDate = (raw: string | undefined | null, end?: string | undefined
   if (end && raw !== end) return formatTripRange(raw, end);
   return fmtTrip(raw) || 'TBD';
 };
+
+type DiscoverCardProps = {
+  trip: any;
+  index: number;
+  reqStatus: 'pending' | 'approved' | 'declined' | 'cancelled' | undefined;
+  isJoining: boolean;
+  isOwnTrip: boolean;
+  onCardPress: (trip: any) => void;
+  onJoinPress: (trip: any, ctaDisabled: boolean) => void;
+};
+
+const DiscoverCard = memo(function DiscoverCard({
+  trip: r, index: i, reqStatus, isJoining, isOwnTrip, onCardPress, onJoinPress,
+}: DiscoverCardProps) {
+  const max = r.max_riders || 8;
+  const taken = 1 + (r.crew_ids?.length || 0);
+  const seatsLeft = Math.max(0, max - taken);
+  const isFull = seatsLeft <= 0;
+  const ctaLabel =
+    isJoining ? 'SENDING…' :
+    reqStatus === 'pending' ? '✓ REQUEST PENDING' :
+    reqStatus === 'approved' ? 'OPEN RIDE →' :
+    reqStatus === 'declined' ? 'REQUEST DECLINED' :
+    isFull ? 'FULL — NO SEATS LEFT' :
+    'REQUEST TO JOIN →';
+  const ctaDisabled =
+    isJoining || reqStatus === 'pending' || reqStatus === 'declined' || isFull;
+
+  return (
+    <TouchableOpacity testID={`discover-card-${i}`} activeOpacity={0.85} onPress={() => onCardPress(r)} style={styles.card}>
+      <View style={styles.illusWrap}>
+        <TripIllus trip={r} width={360} height={180} />
+        <View style={styles.regionTag} testID={`discover-region-tag-${i}`}>
+          <Feather name="map-pin" size={9} color={colors.light.bg} />
+          <Text style={[type.meta, { color: colors.light.bg, marginLeft: 4, letterSpacing: 0.8 }]}>
+            {(r.city || r.start?.name || 'INDIA').split(' ')[0].toUpperCase()}
+          </Text>
+        </View>
+        <View style={[styles.regionTag, styles.seatsTag, isFull && styles.seatsTagFull]} testID={`discover-seats-tag-${i}`}>
+          <Feather name="users" size={9} color={colors.light.bg} />
+          <Text style={[type.meta, { color: colors.light.bg, marginLeft: 4, letterSpacing: 0.8 }]}>
+            {isFull ? 'FULL' : `${seatsLeft} SEAT${seatsLeft === 1 ? '' : 'S'} LEFT`}
+          </Text>
+        </View>
+        {isOwnTrip ? (
+          <View style={styles.ownBadge} testID={`discover-own-badge-${i}`}>
+            <Feather name="star" size={9} color={colors.light.amber} />
+            <Text style={[type.meta, { color: colors.light.amber, marginLeft: 4, letterSpacing: 0.8 }]}>
+              YOUR RIDE
+            </Text>
+          </View>
+        ) : null}
+      </View>
+      <View style={styles.cardBody}>
+        <Eyebrow>{formatTripDate(r.planned_date, r.planned_end_date).toUpperCase()}</Eyebrow>
+        <Text style={[type.h2, { color: colors.light.ink, marginTop: 4 }]}>{r.name}</Text>
+        <Meta style={{ marginTop: space.sm }}>
+          {(r.start?.name || '').toUpperCase()} → {(r.end?.name || '').toUpperCase()}
+        </Meta>
+        {r.description ? (
+          <Text numberOfLines={2} style={[type.body, { color: colors.light.inkMuted, marginTop: space.sm }]}>
+            {r.description}
+          </Text>
+        ) : null}
+        <View style={styles.metricsRow}>
+          <View style={styles.metric}><Meta>DIST</Meta><Text style={[type.h3, { color: colors.light.ink }]}>{r.distance_km}<Text style={type.meta}> KM</Text></Text></View>
+          <View style={styles.metric}><Meta>ELEV</Meta><Text style={[type.h3, { color: colors.light.ink }]}>{r.elevation_m}<Text style={type.meta}> M</Text></Text></View>
+          <View style={styles.metric}><Meta>CREW</Meta><Text style={[type.h3, { color: colors.light.ink }]}>{taken}<Text style={type.meta}> / {max}</Text></Text></View>
+        </View>
+        <TouchableOpacity
+          testID={`discover-join-${i}`}
+          style={[styles.joinBtn, ctaDisabled && reqStatus !== 'approved' && styles.joinBtnDisabled, reqStatus === 'pending' && styles.joinBtnPending]}
+          onPress={(e) => { e.stopPropagation?.(); onJoinPress(r, ctaDisabled && reqStatus !== 'approved'); }}
+          disabled={ctaDisabled && reqStatus !== 'approved'}
+          activeOpacity={0.85}
+        >
+          <Meta style={{ color: reqStatus === 'pending' ? colors.light.ink : '#FFFFFF' }}>{ctaLabel}</Meta>
+        </TouchableOpacity>
+      </View>
+    </TouchableOpacity>
+  );
+});
 
 export default function Discover() {
   const router = useRouter();
@@ -90,7 +173,25 @@ export default function Discover() {
     },
   });
   const joining = joinMutation.isPending ? joinMutation.variables?.tripId : null;
-  const requestJoin = (trip: any) => joinMutation.mutate({ tripId: trip.id });
+  const requestJoin = useCallback((trip: any) => joinMutation.mutate({ tripId: trip.id }), [joinMutation]);
+
+  // Prefetch trip detail on row press-in so detail screen mounts warm.
+  const onCardPress = useCallback((r: any) => {
+    qc.prefetchQuery({
+      queryKey: ['trips', 'detail', r.id],
+      queryFn: async () => (await api.get(`/trips/${r.id}`)).data,
+    });
+    router.push(`/trip/${r.id}`);
+  }, [qc, router]);
+
+  const onJoinPress = useCallback((r: any, ctaDisabled: boolean) => {
+    const status = requestState[r.id];
+    if (status === 'approved') { router.push(`/trip/${r.id}`); return; }
+    if (ctaDisabled) return;
+    requestJoin(r);
+  }, [requestState, router, requestJoin]);
+
+  const meId: string | undefined = meQuery.data?.id;
 
   return (
     <SafeAreaView style={styles.container} edges={['top']} testID="discover-screen">
@@ -119,107 +220,48 @@ export default function Discover() {
           <Meta style={{ marginLeft: space.sm, color: colors.light.inkMuted, fontSize: 10 }}>ALL</Meta>
         </View>
       )}
-      <ScrollView contentContainerStyle={{ paddingBottom: space.xxl }} refreshControl={<RefreshControl refreshing={ridesQuery.isRefetching && !isInitialLoading} onRefresh={onRefresh} />}>
-        {isInitialLoading ? (
-          <View>
-            <SkeletonTripCard testID="discover-skel-1" />
-            <SkeletonTripCard testID="discover-skel-2" />
-          </View>
-        ) : rides.length === 0 ? (
-          <View style={styles.empty}>
-            <EmptyRoadIllus width={width - space.lg * 2} height={150} />
-            <Text style={[type.body, { color: colors.light.inkMuted, textAlign: 'center', marginTop: space.lg }]}>
-              The frequencies are quiet.{'\n'}Pull to scan again.
-            </Text>
-            <TouchableOpacity
-              testID="discover-empty-cta"
-              onPress={() => router.push('/plan')}
-              style={styles.emptyCta}
-              activeOpacity={0.85}
-            >
-              <Feather name="plus" size={14} color={colors.light.ink} />
-              <Meta style={{ marginLeft: 8, color: colors.light.ink }}>HOST AN OPEN RIDE</Meta>
-            </TouchableOpacity>
-          </View>
-        ) : rides.map((r, i) => {
-          const max = r.max_riders || 8;
-          const taken = 1 + (r.crew_ids?.length || 0); // organiser + confirmed crew
-          const seatsLeft = Math.max(0, max - taken);
-          const reqStatus = requestState[r.id];
-          const isOwnTrip = meQuery.data?.id && r.user_id === meQuery.data.id;
-          const isFull = seatsLeft <= 0;
-          const ctaLabel =
-            joining === r.id ? 'SENDING…' :
-            reqStatus === 'pending' ? '✓ REQUEST PENDING' :
-            reqStatus === 'approved' ? 'OPEN RIDE →' :
-            reqStatus === 'declined' ? 'REQUEST DECLINED' :
-            isFull ? 'FULL — NO SEATS LEFT' :
-            'REQUEST TO JOIN →';
-          const ctaDisabled =
-            joining === r.id || reqStatus === 'pending' || reqStatus === 'declined' || isFull;
-          const onCtaPress = () => {
-            if (reqStatus === 'approved') { router.push(`/trip/${r.id}`); return; }
-            if (ctaDisabled) return;
-            requestJoin(r);
-          };
-          return (
-            <TouchableOpacity key={r.id} testID={`discover-card-${i}`} activeOpacity={0.85} onPress={() => router.push(`/trip/${r.id}`)} style={styles.card}>
-              <View style={styles.illusWrap}>
-                <TripIllus trip={r} width={360} height={180} />
-                {/* M8 — region tag overlay */}
-                <View style={styles.regionTag} testID={`discover-region-tag-${i}`}>
-                  <Feather name="map-pin" size={9} color={colors.light.bg} />
-                  <Text style={[type.meta, { color: colors.light.bg, marginLeft: 4, letterSpacing: 0.8 }]}>
-                    {(r.city || r.start?.name || 'INDIA').split(' ')[0].toUpperCase()}
-                  </Text>
-                </View>
-                {/* Seats-left chip — top right, mirrors region tag */}
-                <View style={[styles.regionTag, styles.seatsTag, isFull && styles.seatsTagFull]} testID={`discover-seats-tag-${i}`}>
-                  <Feather name="users" size={9} color={colors.light.bg} />
-                  <Text style={[type.meta, { color: colors.light.bg, marginLeft: 4, letterSpacing: 0.8 }]}>
-                    {isFull ? 'FULL' : `${seatsLeft} SEAT${seatsLeft === 1 ? '' : 'S'} LEFT`}
-                  </Text>
-                </View>
-                {/* "Your ride" badge — bottom left, only shown to the organiser */}
-                {isOwnTrip ? (
-                  <View style={styles.ownBadge} testID={`discover-own-badge-${i}`}>
-                    <Feather name="star" size={9} color={colors.light.amber} />
-                    <Text style={[type.meta, { color: colors.light.amber, marginLeft: 4, letterSpacing: 0.8 }]}>
-                      YOUR RIDE
-                    </Text>
-                  </View>
-                ) : null}
-              </View>
-              <View style={styles.cardBody}>
-                <Eyebrow>{formatTripDate(r.planned_date, r.planned_end_date).toUpperCase()}</Eyebrow>
-                <Text style={[type.h2, { color: colors.light.ink, marginTop: 4 }]}>{r.name}</Text>
-                <Meta style={{ marginTop: space.sm }}>
-                  {(r.start?.name || '').toUpperCase()} → {(r.end?.name || '').toUpperCase()}
-                </Meta>
-                {r.description ? (
-                  <Text numberOfLines={2} style={[type.body, { color: colors.light.inkMuted, marginTop: space.sm }]}>
-                    {r.description}
-                  </Text>
-                ) : null}
-                <View style={styles.metricsRow}>
-                  <View style={styles.metric}><Meta>DIST</Meta><Text style={[type.h3, { color: colors.light.ink }]}>{r.distance_km}<Text style={type.meta}> KM</Text></Text></View>
-                  <View style={styles.metric}><Meta>ELEV</Meta><Text style={[type.h3, { color: colors.light.ink }]}>{r.elevation_m}<Text style={type.meta}> M</Text></Text></View>
-                  <View style={styles.metric}><Meta>CREW</Meta><Text style={[type.h3, { color: colors.light.ink }]}>{taken}<Text style={type.meta}> / {max}</Text></Text></View>
-                </View>
-                <TouchableOpacity
-                  testID={`discover-join-${i}`}
-                  style={[styles.joinBtn, ctaDisabled && reqStatus !== 'approved' && styles.joinBtnDisabled, reqStatus === 'pending' && styles.joinBtnPending]}
-                  onPress={(e) => { e.stopPropagation?.(); onCtaPress(); }}
-                  disabled={ctaDisabled && reqStatus !== 'approved'}
-                  activeOpacity={0.85}
-                >
-                  <Meta style={{ color: reqStatus === 'pending' ? colors.light.ink : '#FFFFFF' }}>{ctaLabel}</Meta>
-                </TouchableOpacity>
-              </View>
-            </TouchableOpacity>
-          );
-        })}
-      </ScrollView>
+      {isInitialLoading ? (
+        <View>
+          <SkeletonTripCard testID="discover-skel-1" />
+          <SkeletonTripCard testID="discover-skel-2" />
+        </View>
+      ) : (
+        <FlashList
+          data={rides}
+          keyExtractor={(r) => r.id}
+          estimatedItemSize={380}
+          contentContainerStyle={{ paddingBottom: space.xxl }}
+          refreshControl={<RefreshControl refreshing={ridesQuery.isRefetching && !isInitialLoading} onRefresh={onRefresh} />}
+          renderItem={({ item, index }) => (
+            <DiscoverCard
+              trip={item}
+              index={index}
+              reqStatus={requestState[item.id]}
+              isJoining={joining === item.id}
+              isOwnTrip={!!meId && item.user_id === meId}
+              onCardPress={onCardPress}
+              onJoinPress={onJoinPress}
+            />
+          )}
+          ListEmptyComponent={
+            <View style={styles.empty}>
+              <EmptyRoadIllus width={width - space.lg * 2} height={150} />
+              <Text style={[type.body, { color: colors.light.inkMuted, textAlign: 'center', marginTop: space.lg }]}>
+                The frequencies are quiet.{'\n'}Pull to scan again.
+              </Text>
+              <TouchableOpacity
+                testID="discover-empty-cta"
+                onPress={() => router.push('/plan')}
+                style={styles.emptyCta}
+                activeOpacity={0.85}
+              >
+                <Feather name="plus" size={14} color={colors.light.ink} />
+                <Meta style={{ marginLeft: 8, color: colors.light.ink }}>HOST AN OPEN RIDE</Meta>
+              </TouchableOpacity>
+            </View>
+          }
+        />
+      )}
     </SafeAreaView>
   );
 }

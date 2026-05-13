@@ -4,7 +4,7 @@ import { FlashList } from '@shopify/flash-list';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../src/lib/api';
 import { colors, type, space } from '../../src/theme/tokens';
 import { Eyebrow, Rule, Meta } from '../../src/components/ui';
@@ -73,9 +73,15 @@ export default function Trips() {
   const onRefresh = async () => {
     await Promise.all([tripsQuery.refetch(), myReqsQuery.refetch()]);
   };
+  const qc = useQueryClient();
   const rowPress = useCallback((t: any) => {
+    // Warm the detail query before navigation so the screen mounts with data.
+    qc.prefetchQuery({
+      queryKey: ['trips', 'detail', t.id],
+      queryFn: async () => (await api.get(`/trips/${t.id}`)).data,
+    });
     router.push(t.status === 'active' ? `/ride/${t.id}` : `/trip/${t.id}`);
-  }, [router]);
+  }, [router, qc]);
   const filtered = trips.filter(t => t.status === tab);
   // Map trip_id -> bool for quick lookup in the row
   const pendingByTrip = React.useMemo(() => {
