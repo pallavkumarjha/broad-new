@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter, useFocusEffect } from 'expo-router';
+import { useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
+import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../../src/contexts/AuthContext';
 import { api } from '../../src/lib/api';
 import { queryClient } from '../../src/lib/queryClient';
@@ -36,18 +37,17 @@ function avatarUrl(name?: string): string {
 export default function Profile() {
   const { user, refresh } = useAuth();
   const router = useRouter();
-  const [badges, setBadges] = useState<any[]>([]);
   const [cityPickerOpen, setCityPickerOpen] = useState(false);
   const [savingCity, setSavingCity] = useState(false);
   const [optimisticCity, setOptimisticCity] = useState<string | null | undefined>(undefined);
 
-  useFocusEffect(
-    React.useCallback(() => {
-      (async () => {
-        try { const { data } = await api.get('/users/me/achievements'); setBadges(data.badges || []); } catch {}
-      })();
-    }, [])
-  );
+  // RQ-backed: inherits the disk persistence layer, dedupes across mounts.
+  const badgesQuery = useQuery<{ badges: any[] }>({
+    queryKey: ['users', 'me', 'achievements'],
+    queryFn: async () => (await api.get('/users/me/achievements')).data,
+    staleTime: 5 * 60_000,  // achievements don't churn — 5 min is plenty
+  });
+  const badges = badgesQuery.data?.badges ?? [];
 
   const displayCity = optimisticCity !== undefined ? optimisticCity : user?.home_city;
 
