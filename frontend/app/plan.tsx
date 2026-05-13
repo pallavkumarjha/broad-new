@@ -49,10 +49,11 @@ const relativeDateLabel = (d: Date) => {
 export default function Plan() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const [name, setName] = useState('Weekend Run');
+  const [name, setName] = useState('');
   const [start, setStart] = useState(PRESETS[0]);
   const [end, setEnd] = useState(PRESETS[2]);
   const [plannedDate, setPlannedDate] = useState(() => startOfDay(new Date(Date.now() + DAY_MS * 3)));
+  const [plannedEndDate, setPlannedEndDate] = useState(() => startOfDay(new Date(Date.now() + DAY_MS * 3)));
   const [waypoints, setWaypoints] = useState<typeof PRESETS>([]);
   const [crewList, setCrewList] = useState<string[]>([]);
   const [crewIdsList, setCrewIdsList] = useState<string[]>([]); // user IDs for push notifications
@@ -72,6 +73,7 @@ export default function Plan() {
   const [description, setDescription] = useState('');
   const [pickerFor, setPickerFor] = useState<'start' | 'end' | 'wp' | null>(null);
   const [datePickerOpen, setDatePickerOpen] = useState(false);
+  const [datePickerFor, setDatePickerFor] = useState<'start' | 'end'>('start');
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<typeof PRESETS>(PRESETS);
   const [searching, setSearching] = useState(false);
@@ -81,6 +83,23 @@ export default function Plan() {
   const searchTimer = useRef<any>(null);
 
   const allPoints = useMemo(() => [start, ...waypoints, end], [start, end, waypoints]);
+
+  // Sync duration and end date
+  useEffect(() => {
+    const diff = Math.round((plannedEndDate.getTime() - plannedDate.getTime()) / DAY_MS) + 1;
+    if (diff !== days) setDays(Math.max(1, diff));
+  }, [plannedDate, plannedEndDate]);
+
+  const handleSetDays = (d: number) => {
+    setDays(d);
+    setPlannedEndDate(new Date(plannedDate.getFullYear(), plannedDate.getMonth(), plannedDate.getDate() + d - 1));
+  };
+
+  const handleSetStartDate = (d: Date) => {
+    const currentDays = days;
+    setPlannedDate(d);
+    setPlannedEndDate(new Date(d.getFullYear(), d.getMonth(), d.getDate() + currentDays - 1));
+  };
 
   // M3 — spring the STOPS counter when waypoints change
   const stopsAnim = useRef(new Animated.Value(1)).current;
@@ -201,6 +220,7 @@ export default function Plan() {
         distance_km: distance,
         elevation_m: elevMax ?? Math.round(distance * 3.5),
         planned_date: toIsoDate(plannedDate),
+        planned_end_date: toIsoDate(plannedEndDate),
         crew: crewList,
         crew_ids: crewIdsList,
         notes,
@@ -222,7 +242,7 @@ export default function Plan() {
     <SafeAreaView style={styles.container} testID="plan-screen">
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} testID="plan-back-btn"><Feather name="arrow-left" size={22} color={colors.light.ink} /></TouchableOpacity>
-        <Eyebrow>PLOT THE ROUTE</Eyebrow>
+        <Eyebrow>NEW RIDE</Eyebrow>
         <View style={{ width: 22 }} />
       </View>
       <Rule />
@@ -246,18 +266,18 @@ export default function Plan() {
           <Rule />
 
           <View style={styles.section}>
-            <Eyebrow>TRIP NAME</Eyebrow>
-            <TextInput testID="plan-name-input" value={name} onChangeText={setName} onFocus={() => setFocused('name')} onBlur={() => setFocused(null)} style={[styles.input, focused === 'name' && styles.inputFocused]} placeholderTextColor={colors.light.inkMuted} />
+            <Eyebrow>NAME YOUR RIDE</Eyebrow>
+            <TextInput testID="plan-name-input" value={name} onChangeText={setName} onFocus={() => setFocused('name')} onBlur={() => setFocused(null)} style={[styles.input, focused === 'name' && styles.inputFocused]} placeholder="E.g., Sunday Breakfast Run" placeholderTextColor={colors.light.inkMuted} />
           </View>
 
           <View style={styles.section}>
-            <Eyebrow>DURATION — {days} DAY{days > 1 ? 'S' : ''}</Eyebrow>
+            <Eyebrow>DURATION</Eyebrow>
             <View style={styles.daysRow}>
-              <TouchableOpacity testID="plan-days-minus" onPress={() => setDays(Math.max(1, days - 1))} style={styles.daysBtn}>
+              <TouchableOpacity testID="plan-days-minus" onPress={() => handleSetDays(Math.max(1, days - 1))} style={styles.daysBtn}>
                 <Feather name="minus" size={16} color={colors.light.ink} />
               </TouchableOpacity>
               <Text style={[type.h1, { color: colors.light.ink, minWidth: 40, textAlign: 'center' }]}>{days}</Text>
-              <TouchableOpacity testID="plan-days-plus" onPress={() => setDays(Math.min(14, days + 1))} style={styles.daysBtn}>
+              <TouchableOpacity testID="plan-days-plus" onPress={() => handleSetDays(Math.min(14, days + 1))} style={styles.daysBtn}>
                 <Feather name="plus" size={16} color={colors.light.ink} />
               </TouchableOpacity>
               <Meta style={{ marginLeft: space.md }}>{days === 1 ? 'DAY TRIP' : `MULTI-DAY · ~${Math.round(distance / days)} KM/DAY`}</Meta>
@@ -266,13 +286,28 @@ export default function Plan() {
 
           <View style={styles.section}>
             <Eyebrow>START DATE</Eyebrow>
-            <TouchableOpacity testID="plan-pick-date" onPress={() => setDatePickerOpen(true)} style={styles.pickRow} activeOpacity={0.85}>
+            <TouchableOpacity testID="plan-pick-date" onPress={() => { setDatePickerFor('start'); setDatePickerOpen(true); }} style={styles.pickRow} activeOpacity={0.85}>
               <View>
                 <Text style={[type.bodyLg, { color: colors.light.ink }]}>{formatPlannedDate(plannedDate)}</Text>
                 <Meta style={{ marginTop: 4, color: colors.light.amber }}>{relativeDateLabel(plannedDate)}</Meta>
               </View>
               <Meta>CHANGE</Meta>
             </TouchableOpacity>
+          </View>
+
+          <View style={styles.section}>
+            <Eyebrow>END DATE</Eyebrow>
+            <TouchableOpacity testID="plan-pick-end-date" onPress={() => { setDatePickerFor('end'); setDatePickerOpen(true); }} style={styles.pickRow} activeOpacity={0.85}>
+              <View>
+                <Text style={[type.bodyLg, { color: colors.light.ink }]}>{formatPlannedDate(plannedEndDate)}</Text>
+                <Meta style={{ marginTop: 4, color: colors.light.amber }}>{relativeDateLabel(plannedEndDate)}</Meta>
+              </View>
+              <Meta>CHANGE</Meta>
+            </TouchableOpacity>
+          </View>
+
+          <View style={{ marginTop: space.xl }}>
+            <Rule />
           </View>
 
           <View style={styles.section}>
@@ -303,6 +338,10 @@ export default function Plan() {
             </View>
           </View>
 
+          <View style={{ marginTop: space.xl }}>
+            <Rule />
+          </View>
+
           <View style={styles.section}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
               <Eyebrow>CREW — {crewList.length}</Eyebrow>
@@ -320,6 +359,10 @@ export default function Plan() {
                 </TouchableOpacity>
               </View>
             ))}
+          </View>
+
+          <View style={{ marginTop: space.xl }}>
+            <Rule />
           </View>
 
           <View style={styles.section}>
@@ -405,7 +448,7 @@ export default function Plan() {
             {err ? (
               <ErrorStrip testID="plan-error" title="COULD NOT SAVE" message={err} style={{ marginBottom: space.md }} />
             ) : null}
-            <Button label="SAVE TRIP" onPress={submit} loading={busy} testID="plan-save-button" />
+            <Button label="CREATE RIDE" onPress={submit} loading={busy} testID="plan-save-button" />
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -478,21 +521,28 @@ export default function Plan() {
           opacity: datePickerAnim,
         }]}>
           <View style={styles.pickerHead}>
-            <Eyebrow>CHOOSE START DATE</Eyebrow>
+            <Eyebrow>CHOOSE {datePickerFor.toUpperCase()} DATE</Eyebrow>
             <TouchableOpacity onPress={() => setDatePickerOpen(false)} testID="plan-date-picker-close"><Feather name="x" size={20} color={colors.light.ink} /></TouchableOpacity>
           </View>
           <Rule />
           <ScrollView>
             {dateOptions.map((option, i) => {
-              const selected = toIsoDate(plannedDate) === option.key;
+              const currentDate = datePickerFor === 'start' ? plannedDate : plannedEndDate;
+              const selected = toIsoDate(currentDate) === option.key;
+              const isPast = datePickerFor === 'end' && option.date < plannedDate;
               return (
                 <TouchableOpacity
                   key={option.key}
                   testID={`plan-date-option-${i}`}
-                  style={styles.pickerRow}
+                  style={[styles.pickerRow, isPast && { opacity: 0.3 }]}
                   activeOpacity={0.85}
+                  disabled={isPast}
                   onPress={() => {
-                    setPlannedDate(option.date);
+                    if (datePickerFor === 'start') {
+                      handleSetStartDate(option.date);
+                    } else {
+                      setPlannedEndDate(option.date);
+                    }
                     setDatePickerOpen(false);
                   }}
                 >

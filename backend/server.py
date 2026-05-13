@@ -28,7 +28,7 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo.errors import DuplicateKeyError
-from pydantic import BaseModel, Field, EmailStr
+from pydantic import BaseModel, Field, EmailStr, model_validator
 
 
 # ---------- Logging (must be before first use) ----------
@@ -225,6 +225,7 @@ class TripCreate(BaseModel):
     distance_km: float = 0
     elevation_m: int = 0
     planned_date: Optional[str] = None
+    planned_end_date: Optional[str] = None
     crew: List[str] = Field(default_factory=list)       # display names
     crew_ids: List[str] = Field(default_factory=list)   # user IDs for push notifications
     notes: Optional[str] = ""
@@ -233,6 +234,12 @@ class TripCreate(BaseModel):
     max_riders: int = 8                # cap including organiser; 2..50
     description: str = ""              # optional public-facing pitch
     city: str = ""                     # short region tag, e.g. "Bangalore" — used by Discover filter
+
+    @model_validator(mode="after")
+    def _check_date_range(self):
+        if self.planned_date and self.planned_end_date and self.planned_end_date < self.planned_date:
+            raise ValueError("planned_end_date must be on or after planned_date")
+        return self
 
 
 class PushTokenIn(BaseModel):
@@ -269,12 +276,19 @@ class TripUpdate(BaseModel):
     # Strict YYYY-MM-DD; the frontend always serialises this shape, so a
     # mismatch here means a client bug we want to surface as 422.
     planned_date: Optional[str] = Field(None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+    planned_end_date: Optional[str] = Field(None, pattern=r"^\d{4}-\d{2}-\d{2}$")
     notes: Optional[str] = Field(None, max_length=2000)
     description: Optional[str] = Field(None, max_length=500)
     # Hard ceiling matches Plan/Edit screens. Floor of 1 is the absolute
     # minimum (organiser); we additionally enforce >= current crew_ids+1
     # at the endpoint level since that bound depends on the trip doc.
     max_riders: Optional[int] = Field(None, ge=1, le=50)
+
+    @model_validator(mode="after")
+    def _check_date_range(self):
+        if self.planned_date and self.planned_end_date and self.planned_end_date < self.planned_date:
+            raise ValueError("planned_end_date must be on or after planned_date")
+        return self
 
 
 class TripRequestCreate(BaseModel):
@@ -698,18 +712,29 @@ async def update_trip(trip_id: str, body: TripUpdate, user: dict = Depends(get_c
     if doc["user_id"] != user["id"]:
         raise HTTPException(status_code=403, detail="Forbidden")
     update = {k: v for k, v in body.dict(exclude_none=True).items()}
-    # Metadata edits (name, planned_date, notes, description, max_riders) are only
+    # Metadata edits (name, planned_date, planned_end_date, notes, description, max_riders) are only
     # valid on planned trips. Reject the whole PATCH with 400 if the caller is
     # trying to edit metadata on an active/completed trip — silently dropping
     # the fields would let the frontend show "saved" without any change taking
     # effect, which is worse than a clear failure.
-    _METADATA_FIELDS = {"name", "planned_date", "notes", "description", "max_riders"}
+    _METADATA_FIELDS = {"name", "planned_date", "planned_end_date", "notes", "description", "max_riders"}
     metadata_in_body = _METADATA_FIELDS & update.keys()
     if metadata_in_body and doc.get("status") != "planned":
         raise HTTPException(
             status_code=400,
             detail="Trip has already started — name, date, notes, description and max_riders can't be changed.",
         )
+    # Cross-field date validation against stored doc — model_validator only
+    # catches the case where both dates are in the payload. A partial PATCH
+    # that moves only one end of the range must still hold start <= end.
+    if "planned_date" in update or "planned_end_date" in update:
+        new_start = update.get("planned_date", doc.get("planned_date"))
+        new_end = update.get("planned_end_date", doc.get("planned_end_date"))
+        if new_start and new_end and new_end < new_start:
+            raise HTTPException(
+                status_code=400,
+                detail="planned_end_date must be on or after planned_date.",
+            )
     # Clamp max_riders so it never drops below current confirmed crew (organiser
     # + crew_ids). Otherwise the org could "soft-kick" riders by lowering the
     # cap, leaving the trip in an over-capacity state.

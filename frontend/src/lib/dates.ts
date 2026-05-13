@@ -26,6 +26,34 @@ export function formatTripDate(raw: string | undefined | null): string {
   });
 }
 
+/** Format a date range, e.g. "1 May – 3 May 2026".
+ * If dates are the same or end date is missing, behaves like formatTripDate. */
+export function formatTripRange(start: string | undefined | null, end: string | undefined | null): string {
+  if (!start) return '';
+  if (!end || start === end) return formatTripDate(start);
+
+  const d1 = parsePlannedDate(start);
+  const d2 = parsePlannedDate(end);
+  if (!d1 || !d2) return formatTripDate(start);
+
+  const sameMonth = d1.getMonth() === d2.getMonth() && d1.getFullYear() === d2.getFullYear();
+  const sameYear = d1.getFullYear() === d2.getFullYear();
+
+  if (sameMonth) {
+    const day1 = d1.getDate();
+    const rest = d2.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+    return `${day1} – ${rest}`;
+  }
+
+  if (sameYear) {
+    const dayMonth1 = d1.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+    const rest = d2.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+    return `${dayMonth1} – ${rest}`;
+  }
+
+  return `${formatTripDate(start)} – ${formatTripDate(end)}`;
+}
+
 /** Parse a `YYYY-MM-DD` to a Date at local midnight.
  *
  * Why local midnight, not UTC: a planned ride on `2025-05-01` should display

@@ -20,7 +20,7 @@ import { colors, type, space, radius } from '../../src/theme/tokens';
 import { Eyebrow, Rule, SpecRow, Button, Meta, Card } from '../../src/components/ui';
 import { MapView } from '../../src/components/MapView';
 
-import { formatTripDate } from '../../src/lib/dates';
+import { formatTripDate, formatTripRange } from '../../src/lib/dates';
 
 type Role = 'organiser' | 'crew' | 'requester' | 'stranger' | 'declined';
 
@@ -284,7 +284,7 @@ export default function TripDetail() {
         <View style={styles.titleBlock}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
             {trip.planned_date ? (
-              <Eyebrow>{formatTripDate(trip.planned_date).toUpperCase()}</Eyebrow>
+              <Eyebrow>{formatTripRange(trip.planned_date, trip.planned_end_date).toUpperCase()}</Eyebrow>
             ) : null}
             {trip.is_public && (
               <>

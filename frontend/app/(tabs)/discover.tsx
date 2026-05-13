@@ -10,12 +10,15 @@ import { Eyebrow, Rule, Meta } from '../../src/components/ui';
 import { TripIllus, EmptyRoadIllus } from '../../src/components/illustrations';
 import { SkeletonTripCard } from '../../src/components/Skeleton';
 
-import { formatTripDate as fmtTrip } from '../../src/lib/dates';
+import { formatTripDate as fmtTrip, formatTripRange } from '../../src/lib/dates';
 
 /** Discover-specific wrapper — empty date renders as "TBD" here, where unset
  * means "organiser hasn't picked a date yet"; on Trips/TripDetail empty just
  * means hide the field entirely. */
-const formatTripDate = (raw: string | undefined | null) => fmtTrip(raw) || 'TBD';
+const formatTripDate = (raw: string | undefined | null, end?: string | undefined | null) => {
+  if (end && raw !== end) return formatTripRange(raw, end);
+  return fmtTrip(raw) || 'TBD';
+};
 
 export default function Discover() {
   const router = useRouter();
@@ -188,7 +191,7 @@ export default function Discover() {
                 ) : null}
               </View>
               <View style={styles.cardBody}>
-                <Eyebrow>{formatTripDate(r.planned_date).toUpperCase()}</Eyebrow>
+                <Eyebrow>{formatTripDate(r.planned_date, r.planned_end_date).toUpperCase()}</Eyebrow>
                 <Text style={[type.h2, { color: colors.light.ink, marginTop: 4 }]}>{r.name}</Text>
                 <Meta style={{ marginTop: space.sm }}>
                   {(r.start?.name || '').toUpperCase()} → {(r.end?.name || '').toUpperCase()}
