@@ -50,12 +50,14 @@ export default function EditTrip() {
   // Editable fields — seeded from loaded trip
   const [name, setName] = useState('');
   const [plannedDate, setPlannedDate] = useState<Date>(startOfToday());
+  const [plannedEndDate, setPlannedEndDate] = useState<Date>(startOfToday());
   const [notes, setNotes] = useState('');
   const [description, setDescription] = useState('');
   const [maxRiders, setMaxRiders] = useState(8);
 
   const [focused, setFocused] = useState<'name' | 'notes' | 'description' | null>(null);
   const [datePickerOpen, setDatePickerOpen] = useState(false);
+  const [datePickerFor, setDatePickerFor] = useState<'start' | 'end'>('start');
   const datePickerAnim = useRef(new Animated.Value(0)).current;
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
@@ -72,6 +74,8 @@ export default function EditTrip() {
         setDescription(data.description || '');
         setMaxRiders(data.max_riders ?? 8);
         if (data.planned_date) setPlannedDate(parseIsoDate(data.planned_date));
+        if (data.planned_end_date) setPlannedEndDate(parseIsoDate(data.planned_end_date));
+        else if (data.planned_date) setPlannedEndDate(parseIsoDate(data.planned_date));
       } catch {
         Alert.alert('Could not load trip');
         router.back();
@@ -111,6 +115,7 @@ export default function EditTrip() {
       await api.patch(`/trips/${id}`, {
         name: name.trim(),
         planned_date: toIsoDate(plannedDate),
+        planned_end_date: toIsoDate(plannedEndDate),
         notes: notes.trim(),
         ...(trip?.is_public ? {
           description: description.trim(),
@@ -171,13 +176,30 @@ export default function EditTrip() {
             <Eyebrow>START DATE</Eyebrow>
             <TouchableOpacity
               testID="edit-pick-date"
-              onPress={() => setDatePickerOpen(true)}
+              onPress={() => { setDatePickerFor('start'); setDatePickerOpen(true); }}
               style={styles.pickRow}
               activeOpacity={0.85}
             >
               <View>
                 <Text style={[type.bodyLg, { color: colors.light.ink }]}>{formatPlannedDate(plannedDate)}</Text>
                 <Meta style={{ marginTop: 4, color: colors.light.amber }}>{relativeDateLabel(plannedDate)}</Meta>
+              </View>
+              <Meta>CHANGE</Meta>
+            </TouchableOpacity>
+          </View>
+
+          {/* End Date */}
+          <View style={styles.section}>
+            <Eyebrow>END DATE</Eyebrow>
+            <TouchableOpacity
+              testID="edit-pick-end-date"
+              onPress={() => { setDatePickerFor('end'); setDatePickerOpen(true); }}
+              style={styles.pickRow}
+              activeOpacity={0.85}
+            >
+              <View>
+                <Text style={[type.bodyLg, { color: colors.light.ink }]}>{formatPlannedDate(plannedEndDate)}</Text>
+                <Meta style={{ marginTop: 4, color: colors.light.amber }}>{relativeDateLabel(plannedEndDate)}</Meta>
               </View>
               <Meta>CHANGE</Meta>
             </TouchableOpacity>
@@ -267,7 +289,7 @@ export default function EditTrip() {
           opacity: datePickerAnim,
         }]}>
           <View style={styles.pickerHead}>
-            <Eyebrow>CHOOSE START DATE</Eyebrow>
+            <Eyebrow>CHOOSE {datePickerFor.toUpperCase()} DATE</Eyebrow>
             <TouchableOpacity onPress={() => setDatePickerOpen(false)} testID="edit-date-picker-close">
               <Feather name="x" size={20} color={colors.light.ink} />
             </TouchableOpacity>
@@ -275,14 +297,26 @@ export default function EditTrip() {
           <Rule />
           <ScrollView>
             {dateOptions.map((option, i) => {
-              const selected = toIsoDate(plannedDate) === option.key;
+              const currentDate = datePickerFor === 'start' ? plannedDate : plannedEndDate;
+              const selected = toIsoDate(currentDate) === option.key;
+              const isPast = datePickerFor === 'end' && option.date < plannedDate;
               return (
                 <TouchableOpacity
                   key={option.key}
                   testID={`edit-date-option-${i}`}
-                  style={styles.pickerRow}
+                  style={[styles.pickerRow, isPast && { opacity: 0.3 }]}
                   activeOpacity={0.85}
-                  onPress={() => { setPlannedDate(option.date); setDatePickerOpen(false); }}
+                  disabled={isPast}
+                  onPress={() => {
+                    if (datePickerFor === 'start') {
+                      const diffDays = Math.round((plannedEndDate.getTime() - plannedDate.getTime()) / DAY_MS);
+                      setPlannedDate(option.date);
+                      setPlannedEndDate(new Date(option.date.getFullYear(), option.date.getMonth(), option.date.getDate() + diffDays));
+                    } else {
+                      setPlannedEndDate(option.date);
+                    }
+                    setDatePickerOpen(false);
+                  }}
                 >
                   <View style={{ flex: 1 }}>
                     <Text style={[type.body, { color: colors.light.ink, fontFamily: selected ? 'Fraunces_500Medium' : 'Fraunces_400Regular' }]}>

@@ -9,7 +9,7 @@ import { colors, type, space } from '../../src/theme/tokens';
 import { Eyebrow, Rule, Meta } from '../../src/components/ui';
 import { EmptyRoadIllus } from '../../src/components/illustrations';
 import { SkeletonTripRow } from '../../src/components/Skeleton';
-import { formatTripDate } from '../../src/lib/dates';
+import { formatTripRange } from '../../src/lib/dates';
 
 const TABS: { key: string; label: string }[] = [
   { key: 'active', label: 'ACTIVE' },
@@ -130,7 +130,7 @@ export default function Trips() {
             <TouchableOpacity key={t.id} testID={`trip-row-${t.id}`} activeOpacity={0.7} onPress={() => router.push(t.status === 'active' ? `/ride/${t.id}` : `/trip/${t.id}`)} style={styles.row}>
               <View style={{ flex: 1 }}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                  <Eyebrow>{formatTripDate(t.planned_date).toUpperCase() || ''}</Eyebrow>
+                  <Eyebrow>{formatTripRange(t.planned_date, t.planned_end_date).toUpperCase() || ''}</Eyebrow>
                   {hasPending && (
                     <View style={styles.rowBadge} testID={`trip-row-pending-${t.id}`}>
                       <Meta style={{ color: colors.light.bg }}>PENDING</Meta>

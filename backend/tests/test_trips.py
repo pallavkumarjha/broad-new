@@ -71,6 +71,8 @@ class TestTrips:
             "waypoints": [],
             "distance_km": 580,
             "elevation_m": 650,
+            "planned_date": "2026-05-20",
+            "planned_end_date": "2026-05-22",
             "crew": ["Test Crew"],
             "notes": "Test trip",
             "is_public": False
@@ -88,6 +90,8 @@ class TestTrips:
         assert trip["status"] == "planned"
         assert "id" in trip
         assert trip["distance_km"] == 580
+        assert trip["planned_date"] == "2026-05-20"
+        assert trip["planned_end_date"] == "2026-05-22"
         
         # Verify persistence with GET
         trip_id = trip["id"]
@@ -129,6 +133,42 @@ class TestTrips:
         updated_trip = patch_response.json()
         assert updated_trip["status"] == "active"
         assert updated_trip["started_at"] is not None, "started_at should be set"
+
+    def test_patch_trip_dates(self, base_url, api_client, auth_headers):
+        """Test PATCH /trips/{id} can update planned_date and planned_end_date"""
+        # First create a trip
+        new_trip = {
+            "name": "TEST_Date Patch Test",
+            "start": {"name": "Delhi", "lat": 28.6139, "lng": 77.2090},
+            "end": {"name": "Jaipur", "lat": 26.9124, "lng": 75.7873},
+            "distance_km": 280,
+            "elevation_m": 0,
+            "planned_date": "2026-06-01",
+            "planned_end_date": "2026-06-02",
+            "crew": [],
+            "is_public": False
+        }
+        create_response = api_client.post(
+            f"{base_url}/api/trips",
+            json=new_trip,
+            headers=auth_headers
+        )
+        trip_id = create_response.json()["id"]
+
+        # Update dates
+        patch_response = api_client.patch(
+            f"{base_url}/api/trips/{trip_id}",
+            json={
+                "planned_date": "2026-07-01",
+                "planned_end_date": "2026-07-05"
+            },
+            headers=auth_headers
+        )
+        assert patch_response.status_code == 200
+        
+        updated_trip = patch_response.json()
+        assert updated_trip["planned_date"] == "2026-07-01"
+        assert updated_trip["planned_end_date"] == "2026-07-05"
 
     def test_complete_trip_updates_stats(self, base_url, api_client, auth_headers):
         """Test PATCH /trips/{id} with status=completed updates user stats"""
