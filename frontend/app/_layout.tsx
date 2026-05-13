@@ -9,8 +9,9 @@ import * as Notifications from 'expo-notifications';
 import { AuthProvider } from '../src/contexts/AuthContext';
 import { SettingsProvider } from '../src/contexts/SettingsContext';
 import { colors } from '../src/theme/tokens';
-import { QueryClientProvider } from '@tanstack/react-query';
+import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
 import { queryClient } from '../src/lib/queryClient';
+import { queryPersister, PERSIST_BUSTER, PERSIST_MAX_AGE } from '../src/lib/queryPersist';
 import { GlobalSosListener } from '../src/components/GlobalSosListener';
 // Importing for side effect: registers the background-location task with the
 // OS at app startup. Has to happen before any code calls
@@ -98,7 +99,14 @@ export default function RootLayout() {
   }
 
   return (
-    <QueryClientProvider client={queryClient}>
+    <PersistQueryClientProvider
+      client={queryClient}
+      persistOptions={{
+        persister: queryPersister,
+        maxAge: PERSIST_MAX_AGE,
+        buster: PERSIST_BUSTER,
+      }}
+    >
     <SafeAreaProvider>
       <AuthProvider>
         <SettingsProvider>
@@ -132,6 +140,6 @@ export default function RootLayout() {
         </SettingsProvider>
       </AuthProvider>
     </SafeAreaProvider>
-    </QueryClientProvider>
+    </PersistQueryClientProvider>
   );
 }
