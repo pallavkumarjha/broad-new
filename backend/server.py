@@ -262,6 +262,35 @@ class Trip(TripCreate):
     created_at: str
 
 
+class TripSummary(BaseModel):
+    """Slim Trip shape for list endpoints. Drops large/unused fields
+    (waypoints, notes, current_leg_index, duration_min) so the wire
+    payload for /trips and /trips/discover is 60–80% smaller. The
+    detail endpoint still returns the full Trip."""
+    id: str
+    user_id: str
+    name: str
+    start: Waypoint
+    end: Waypoint
+    distance_km: float = 0
+    elevation_m: int = 0
+    planned_date: Optional[str] = None
+    planned_end_date: Optional[str] = None
+    crew: List[str] = Field(default_factory=list)
+    crew_ids: List[str] = Field(default_factory=list)
+    is_public: bool = False
+    max_riders: int = 8
+    description: str = ""
+    city: str = ""
+    status: Literal["planned", "active", "completed", "cancelled"] = "planned"
+    started_at: Optional[str] = None
+    ended_at: Optional[str] = None
+    actual_distance_km: float = 0
+    top_speed_kmh: float = 0
+    duration_min: int = 0
+    created_at: str
+
+
 class TripUpdate(BaseModel):
     # Status transitions
     status: Optional[Literal["planned", "active", "completed", "cancelled"]] = None
@@ -513,6 +542,27 @@ def trip_from_doc(d: dict) -> Trip:
     return Trip(**d)
 
 
+# Mongo projection for list endpoints — fetch only the fields TripSummary needs.
+# Drops waypoints (potentially-large array of objects) and notes (up to 2000
+# chars) from the wire payload + the DB read.
+_TRIP_SUMMARY_PROJECTION = {
+    "_id": 0,
+    "id": 1, "user_id": 1, "name": 1, "start": 1, "end": 1,
+    "distance_km": 1, "elevation_m": 1,
+    "planned_date": 1, "planned_end_date": 1,
+    "crew": 1, "crew_ids": 1,
+    "is_public": 1, "max_riders": 1, "description": 1, "city": 1,
+    "status": 1, "started_at": 1, "ended_at": 1,
+    "actual_distance_km": 1, "top_speed_kmh": 1, "duration_min": 1,
+    "created_at": 1,
+}
+
+
+def trip_summary_from_doc(d: dict) -> TripSummary:
+    d = {k: v for k, v in d.items() if k != "_id"}
+    return TripSummary(**d)
+
+
 @api.post("/trips", response_model=Trip)
 async def create_trip(body: TripCreate, user: dict = Depends(get_current_user)):
     # 30 trips/hour per user — generous for real planners, hostile to spam bots
@@ -531,10 +581,12 @@ async def create_trip(body: TripCreate, user: dict = Depends(get_current_user)):
         **body.dict(),
     }
     await db.trips.insert_one(doc)
+    if doc.get("is_public"):
+        _invalidate_discover_cache()
     return trip_from_doc(doc)
 
 
-@api.get("/trips", response_model=List[Trip])
+@api.get("/trips", response_model=List[TripSummary])
 async def list_trips(
     status: Optional[str] = None,
     user: dict = Depends(get_current_user),
@@ -545,25 +597,53 @@ async def list_trips(
     query = {"$or": [{"user_id": user["id"]}, {"crew_ids": user["id"]}]}
     if status:
         query["status"] = status
-    cursor = db.trips.find(query, {"_id": 0}).sort("created_at", -1)
+    cursor = db.trips.find(query, _TRIP_SUMMARY_PROJECTION).sort("created_at", -1)
     docs = await cursor.to_list(500)
-    return [trip_from_doc(d) for d in docs]
+    return [trip_summary_from_doc(d) for d in docs]
 
 
-@api.get("/trips/discover", response_model=List[Trip])
+# In-memory TTL cache for /trips/discover. The public feed is read 100x more
+# than written and the same (home_city, show_all) pair fans out across every
+# rider in a city. 30s TTL keeps the feed feeling live while saving Mongo
+# round-trips on every Discover screen mount.
+#
+# Per-process — fine for single-instance Railway deploys; if we scale out
+# horizontally swap this for Redis. Keyed by the actual filter, not user_id,
+# so two riders in the same city share one cached result.
+_DISCOVER_TTL_SECONDS = 30
+_discover_cache: dict[str, tuple[float, list[dict]]] = {}
+
+
+def _discover_cache_key(home_city: str, show_all: bool) -> str:
+    return f"{'all' if show_all else home_city or '_'}"
+
+
+@api.get("/trips/discover", response_model=List[TripSummary])
 async def discover_trips(user: dict = Depends(get_current_user), show_all: bool = False):
     """Get public trips. If user has a home_city set, filter to that city unless show_all=True."""
+    import time
+    home_city = (user.get("home_city") or "").strip()
+    cache_key = _discover_cache_key(home_city, show_all)
+    now = time.time()
+    cached = _discover_cache.get(cache_key)
+    if cached and (now - cached[0]) < _DISCOVER_TTL_SECONDS:
+        return [trip_summary_from_doc(d) for d in cached[1]]
+
     query = {"is_public": True, "status": {"$in": ["planned", "active"]}}
+    if not show_all and home_city:
+        query["city"] = home_city
 
-    # Filter by user's home city if set and show_all is False
-    if not show_all:
-        home_city = (user.get("home_city") or "").strip()
-        if home_city:
-            query["city"] = home_city
-
-    cursor = db.trips.find(query, {"_id": 0}).sort("created_at", -1)
+    cursor = db.trips.find(query, _TRIP_SUMMARY_PROJECTION).sort("created_at", -1)
     docs = await cursor.to_list(100)
-    return [trip_from_doc(d) for d in docs]
+    _discover_cache[cache_key] = (now, docs)
+    return [trip_summary_from_doc(d) for d in docs]
+
+
+def _invalidate_discover_cache() -> None:
+    """Call after writes that affect public-trip visibility (create, edit,
+    delete, status change) so the feed reflects the change within the next
+    request, not 30s later."""
+    _discover_cache.clear()
 
 
 @api.get("/trips/{trip_id}", response_model=Trip)
@@ -768,6 +848,10 @@ async def update_trip(trip_id: str, body: TripUpdate, user: dict = Depends(get_c
             {"$inc": {"stats.total_km": km, "stats.trips_completed": 1}},
         )
     await db.trips.update_one({"id": trip_id}, {"$set": update})
+    # Invalidate discover cache on any mutation to a public trip (or on
+    # status changes that affect visibility).
+    if doc.get("is_public") or update.get("status") or update.get("is_public") is not None:
+        _invalidate_discover_cache()
     # If the trip just transitioned to completed/cancelled, evict everyone from the
     # convoy WS room. Otherwise their clients keep broadcasting position to a
     # zombie room until they manually close the screen.
@@ -824,6 +908,8 @@ async def delete_trip(trip_id: str, user: dict = Depends(get_current_user)):
     if doc["user_id"] != user["id"]:
         raise HTTPException(status_code=403, detail="Forbidden")
     await db.trips.delete_one({"id": trip_id})
+    if doc.get("is_public"):
+        _invalidate_discover_cache()
     return {"ok": True}
 
 
