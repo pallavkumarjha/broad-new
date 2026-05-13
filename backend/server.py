@@ -21,7 +21,6 @@ from exponent_server_sdk import (
     PushClient,
     PushMessage,
     PushServerError,
-    PushTicketEntries,
 )
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, WebSocket, WebSocketDisconnect
 from starlette.middleware.cors import CORSMiddleware
