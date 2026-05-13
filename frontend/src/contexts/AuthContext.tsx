@@ -2,6 +2,8 @@ import React, { createContext, useContext, useEffect, useState, useCallback } fr
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 import { api, storage, TOKEN_KEY, REFRESH_TOKEN_KEY, describeError } from '../lib/api';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { queryClient } from '../lib/queryClient';
 
 export type RiderType = 'solo' | 'crew' | 'commuter' | 'mixed';
 
@@ -116,6 +118,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch {}
     await storage.deleteItem(TOKEN_KEY);
     await storage.deleteItem(REFRESH_TOKEN_KEY);
+    // Drop in-memory + persisted React Query cache so the next signed-in
+    // user doesn't see the previous user's trips flash on screen during
+    // the cold-start hydration window.
+    queryClient.clear();
+    try { await AsyncStorage.removeItem('broad-rq-cache-v1'); } catch {}
     setUser(null);
   };
 
