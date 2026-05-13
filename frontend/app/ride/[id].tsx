@@ -5,6 +5,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { Accelerometer } from 'expo-sensors';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../src/lib/api';
 import { useConvoySocket } from '../../src/lib/useConvoySocket';
 import {
@@ -60,7 +61,20 @@ export default function LiveRide() {
   const insets = useSafeAreaInsets();
   const { settings } = useSettings();
   const { user: currentUser } = useAuth();
-  const [trip, setTrip] = useState<any>(null);
+  const qc = useQueryClient();
+  // Shared cache key with Trip Detail + Trips list prefetch. Means entering
+  // the Ride screen from an "active" row mounts with data already in cache.
+  const tripQuery = useQuery<any>({
+    queryKey: ['trips', 'detail', id],
+    queryFn: async () => (await api.get(`/trips/${id}`)).data,
+    enabled: !!id,
+  });
+  const trip = tripQuery.data;
+  const setTrip = useCallback((updater: any) => {
+    qc.setQueryData(['trips', 'detail', id], (prev: any) => (
+      typeof updater === 'function' ? updater(prev) : updater
+    ));
+  }, [qc, id]);
   const [distanceM, setDistanceM] = useState(0); // accumulated GPS distance in metres
   const [progress, setProgress] = useState(0); // 0..1 — distanceM / planned distance, capped at 1
   const [speed, setSpeed] = useState(0);
@@ -85,10 +99,11 @@ export default function LiveRide() {
   // the map. Avatar stack and rider count stay visible; tap reveals the
   // full list with per-rider speed + pan-to-marker affordance.
   const [crewExpanded, setCrewExpanded] = useState(false);
-  // Re-render once a second so stale-marker computation (based on
-  // updated_at vs Date.now()) actually picks up missing ticks even when
-  // no fresh WS message has arrived to trigger a render.
-  const [, setTick] = useState(0);
+  // The elapsed-time interval below already drives a 1Hz re-render of the
+  // entire screen, which is enough for stale-marker computation to pick up
+  // missing WS ticks (STALE_AFTER_MS = 30_000 so 1s precision is overkill
+  // anyway). The dedicated setTick that used to live here doubled the
+  // forced render rate for no extra signal.
   // Source of truth for "when did this ride start". Initialised to mount-time
   // as a placeholder, then overwritten with `trip.started_at` from the DB once
   // the trip loads. Without this, opening the ride screen 30 minutes into a
@@ -112,13 +127,6 @@ export default function LiveRide() {
   // the latest reading without re-binding callbacks.
   useEffect(() => { speedRef.current = speed; }, [speed]);
   useEffect(() => { headingRef.current = heading; }, [heading]);
-
-  // Drive the stale-marker timer. Cheap (one setState per second) and only
-  // needed while the ride screen is mounted.
-  useEffect(() => {
-    const t = setInterval(() => setTick(n => n + 1), 1000);
-    return () => clearInterval(t);
-  }, []);
 
   // Refs that the SOS payload reads. Updated below via refs (not deps) so the
   // callback identity stays stable for the crash-detection effect's listener.
@@ -215,46 +223,32 @@ export default function LiveRide() {
     }).start();
   }, [progress, progressAnim]);
 
+  // Anchor the elapsed clock to when the ride actually started, not when
+  // this screen mounted. If the rider re-opens the ride 30 min in, the
+  // clock should read 0:30:xx, not 0:00:01.
   useEffect(() => {
-    (async () => {
-      try {
-        const { data } = await api.get(`/trips/${id}`);
-        setTrip(data);
-        // Anchor the elapsed clock to when the ride actually started, not when
-        // this screen mounted. If the rider re-opens the ride 30 min in, the
-        // clock should read 0:30:xx, not 0:00:01. `started_at` is an ISO string
-        // set by the backend when the organiser hits START TRIP; if it's
-        // missing for any reason, leave the mount-time fallback in place.
-        if (data?.started_at) {
-          const ts = Date.parse(data.started_at);
-          if (!Number.isNaN(ts)) {
-            startedAt.current = ts;
-            // Push one immediate tick so the displayed elapsed jumps to the
-            // real value without waiting up to a second for the interval.
-            setElapsed(Math.floor((Date.now() - ts) / 1000));
-          }
-        }
-      } catch {}
-    })();
-  }, [id]);
+    if (!trip?.started_at) return;
+    const ts = Date.parse(trip.started_at);
+    if (Number.isNaN(ts)) return;
+    startedAt.current = ts;
+    // Push one immediate tick so the displayed elapsed jumps to the
+    // real value without waiting up to a second for the interval.
+    setElapsed(Math.floor((Date.now() - ts) / 1000));
+  }, [trip?.started_at]);
 
   // Road-following polyline. Hits the backend cache so this is normally a
   // single quick fetch per ride. Failures are silent — MapView falls back to
   // the straight-line polyline between waypoints when `routeCoords` is empty.
-  const [routeCoords, setRouteCoords] = useState<[number, number][] | undefined>(undefined);
-  useEffect(() => {
-    if (!id) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const { data } = await api.get(`/trips/${id}/route-geometry`);
-        if (!cancelled && Array.isArray(data?.coords) && data.coords.length >= 2) {
-          setRouteCoords(data.coords);
-        }
-      } catch {}
-    })();
-    return () => { cancelled = true; };
-  }, [id]);
+  const routeQuery = useQuery<{ coords?: [number, number][] }>({
+    queryKey: ['trips', 'detail', id, 'route-geometry'],
+    queryFn: async () => (await api.get(`/trips/${id}/route-geometry`)).data,
+    enabled: !!id,
+    staleTime: 60 * 60_000,  // route geometry rarely changes — keep an hour
+  });
+  const routeCoords: [number, number][] | undefined =
+    Array.isArray(routeQuery.data?.coords) && routeQuery.data.coords.length >= 2
+      ? routeQuery.data.coords
+      : undefined;
 
   // Elapsed-time tick. Speed + progress now sourced from GPS only.
   useEffect(() => {
