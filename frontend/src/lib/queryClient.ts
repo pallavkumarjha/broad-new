@@ -26,8 +26,8 @@ import { QueryClient } from '@tanstack/react-query';
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      staleTime: 30_000,        // 30s — tab-switch within this window = 0 network
-      gcTime: 5 * 60_000,       // 5min — keep caches warm across navigation
+      staleTime: 60_000,        // 60s — tab-switch within this window = 0 network
+      gcTime: 24 * 60 * 60_000, // 24h — keep caches around long enough for disk persistence to hydrate next launch
       retry: 1,                 // one retry on transient failures
       retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 5000),
       refetchOnWindowFocus: false,

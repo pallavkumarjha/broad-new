@@ -1817,10 +1817,16 @@ async def seed():
     # Compound index for the "my trips, newest first" list query. Covers both
     # the filter and the sort, letting Mongo skip an in-memory sort step.
     await db.trips.create_index([("user_id", 1), ("created_at", -1)])
+    # GET /trips?status=planned|active|completed — adds status to the composite
+    # so the tab filter doesn't fall back to in-memory filtering.
+    await db.trips.create_index([("user_id", 1), ("status", 1), ("created_at", -1)])
     await db.trips.create_index("is_public")
     await db.trips.create_index("city")
     # Discover screen: find(is_public=True, [city=X]).sort(created_at, -1)
     await db.trips.create_index([("is_public", 1), ("city", 1), ("created_at", -1)])
+    # Discover also filters by status in [planned, active]. Add a status-leading
+    # composite so the {is_public, status, [city]} predicate is index-covered.
+    await db.trips.create_index([("is_public", 1), ("status", 1), ("city", 1), ("created_at", -1)])
     # Trips list uses $or: [{user_id}, {crew_ids}]. Each $or branch is evaluated
     # separately, so crew_ids (a multikey array) needs its own index or it's a COLLSCAN
     # on the crew side every time a rider opens the Trips tab.

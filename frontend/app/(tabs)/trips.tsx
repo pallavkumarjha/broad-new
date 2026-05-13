@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, useWindowDimensions } from 'react-native';
+import React, { useState, memo, useCallback } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, RefreshControl, useWindowDimensions } from 'react-native';
+import { FlashList } from '@shopify/flash-list';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
@@ -16,6 +17,38 @@ const TABS: { key: string; label: string }[] = [
   { key: 'planned', label: 'UPCOMING' },
   { key: 'completed', label: 'LOGGED' },
 ];
+
+type TripRowProps = { trip: any; hasPending: boolean; onPress: (trip: any) => void };
+
+const TripRow = memo(function TripRow({ trip: t, hasPending, onPress }: TripRowProps) {
+  return (
+    <TouchableOpacity testID={`trip-row-${t.id}`} activeOpacity={0.7} onPress={() => onPress(t)} style={styles.row}>
+      <View style={{ flex: 1 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          <Eyebrow>{formatTripRange(t.planned_date, t.planned_end_date).toUpperCase() || ''}</Eyebrow>
+          {hasPending && (
+            <View style={styles.rowBadge} testID={`trip-row-pending-${t.id}`}>
+              <Meta style={{ color: colors.light.bg }}>PENDING</Meta>
+            </View>
+          )}
+          {t.is_public && (
+            <View style={styles.rowPublicBadge}>
+              <Meta style={{ color: colors.light.amber }}>PUBLIC</Meta>
+            </View>
+          )}
+        </View>
+        <Text style={[type.h2, { color: colors.light.ink, marginTop: 4 }]}>{t.name}</Text>
+        <Meta style={{ marginTop: space.sm }}>
+          {(t.start?.name || '').toUpperCase()} → {(t.end?.name || '').toUpperCase()}
+        </Meta>
+        <Meta style={{ marginTop: 4, color: colors.light.amber }}>
+          {t.status === 'completed' ? `${t.actual_distance_km || t.distance_km} KM · ${t.top_speed_kmh || 0} KM/H TOP` : `${t.distance_km} KM · ${t.elevation_m} M`}
+        </Meta>
+      </View>
+      <Feather name="chevron-right" size={20} color={colors.light.inkMuted} />
+    </TouchableOpacity>
+  );
+});
 
 export default function Trips() {
   const router = useRouter();
@@ -40,6 +73,9 @@ export default function Trips() {
   const onRefresh = async () => {
     await Promise.all([tripsQuery.refetch(), myReqsQuery.refetch()]);
   };
+  const rowPress = useCallback((t: any) => {
+    router.push(t.status === 'active' ? `/ride/${t.id}` : `/trip/${t.id}`);
+  }, [router]);
   const filtered = trips.filter(t => t.status === tab);
   // Map trip_id -> bool for quick lookup in the row
   const pendingByTrip = React.useMemo(() => {
@@ -86,75 +122,56 @@ export default function Trips() {
       </View>
       <Rule />
 
-      <ScrollView contentContainerStyle={{ paddingBottom: space.xxl }} refreshControl={<RefreshControl refreshing={tripsQuery.isRefetching && !isInitialLoading} onRefresh={onRefresh} />}>
-        {isInitialLoading ? (
-          <View>
-            <SkeletonTripRow testID="trips-skel-1" />
-            <SkeletonTripRow testID="trips-skel-2" />
-            <SkeletonTripRow testID="trips-skel-3" />
-          </View>
-        ) : filtered.length === 0 ? (
-          <View style={styles.empty}>
-            <EmptyRoadIllus width={width - space.lg * 2} height={150} />
-            <Text style={[type.body, { color: colors.light.inkMuted, textAlign: 'center', marginTop: space.lg }]}>
-              {tab === 'active' && 'No trip in progress.'}
-              {tab === 'planned' && 'No upcoming trips.\nThe road is waiting.'}
-              {tab === 'completed' && 'No trips logged yet.\nThe road is patient.'}
-            </Text>
-            {tab !== 'active' && (
-              <TouchableOpacity
-                testID={`trips-empty-cta-${tab}`}
-                onPress={() => router.push('/plan')}
-                style={styles.emptyCta}
-                activeOpacity={0.85}
-              >
-                <Feather name="plus" size={14} color={colors.light.ink} />
-                <Meta style={{ marginLeft: 8, color: colors.light.ink }}>PLOT A NEW ROUTE</Meta>
-              </TouchableOpacity>
-            )}
-            {tab === 'active' && (
-              <TouchableOpacity
-                testID="trips-empty-cta-active"
-                onPress={() => setTab('planned')}
-                style={styles.emptyCta}
-                activeOpacity={0.85}
-              >
-                <Feather name="arrow-right" size={14} color={colors.light.ink} />
-                <Meta style={{ marginLeft: 8, color: colors.light.ink }}>SEE UPCOMING</Meta>
-              </TouchableOpacity>
-            )}
-          </View>
-        ) : filtered.map((t) => {
-          const hasPending = pendingByTrip[t.id];
-          return (
-            <TouchableOpacity key={t.id} testID={`trip-row-${t.id}`} activeOpacity={0.7} onPress={() => router.push(t.status === 'active' ? `/ride/${t.id}` : `/trip/${t.id}`)} style={styles.row}>
-              <View style={{ flex: 1 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                  <Eyebrow>{formatTripRange(t.planned_date, t.planned_end_date).toUpperCase() || ''}</Eyebrow>
-                  {hasPending && (
-                    <View style={styles.rowBadge} testID={`trip-row-pending-${t.id}`}>
-                      <Meta style={{ color: colors.light.bg }}>PENDING</Meta>
-                    </View>
-                  )}
-                  {t.is_public && (
-                    <View style={styles.rowPublicBadge}>
-                      <Meta style={{ color: colors.light.amber }}>PUBLIC</Meta>
-                    </View>
-                  )}
-                </View>
-                <Text style={[type.h2, { color: colors.light.ink, marginTop: 4 }]}>{t.name}</Text>
-                <Meta style={{ marginTop: space.sm }}>
-                  {(t.start?.name || '').toUpperCase()} → {(t.end?.name || '').toUpperCase()}
-                </Meta>
-                <Meta style={{ marginTop: 4, color: colors.light.amber }}>
-                  {t.status === 'completed' ? `${t.actual_distance_km || t.distance_km} KM · ${t.top_speed_kmh || 0} KM/H TOP` : `${t.distance_km} KM · ${t.elevation_m} M`}
-                </Meta>
-              </View>
-              <Feather name="chevron-right" size={20} color={colors.light.inkMuted} />
-            </TouchableOpacity>
-          );
-        })}
-      </ScrollView>
+      {isInitialLoading ? (
+        <View>
+          <SkeletonTripRow testID="trips-skel-1" />
+          <SkeletonTripRow testID="trips-skel-2" />
+          <SkeletonTripRow testID="trips-skel-3" />
+        </View>
+      ) : (
+        <FlashList
+          data={filtered}
+          keyExtractor={(t) => t.id}
+          estimatedItemSize={120}
+          contentContainerStyle={{ paddingBottom: space.xxl }}
+          refreshControl={<RefreshControl refreshing={tripsQuery.isRefetching && !isInitialLoading} onRefresh={onRefresh} />}
+          renderItem={({ item }) => (
+            <TripRow trip={item} hasPending={!!pendingByTrip[item.id]} onPress={rowPress} />
+          )}
+          ListEmptyComponent={
+            <View style={styles.empty}>
+              <EmptyRoadIllus width={width - space.lg * 2} height={150} />
+              <Text style={[type.body, { color: colors.light.inkMuted, textAlign: 'center', marginTop: space.lg }]}>
+                {tab === 'active' && 'No trip in progress.'}
+                {tab === 'planned' && 'No upcoming trips.\nThe road is waiting.'}
+                {tab === 'completed' && 'No trips logged yet.\nThe road is patient.'}
+              </Text>
+              {tab !== 'active' && (
+                <TouchableOpacity
+                  testID={`trips-empty-cta-${tab}`}
+                  onPress={() => router.push('/plan')}
+                  style={styles.emptyCta}
+                  activeOpacity={0.85}
+                >
+                  <Feather name="plus" size={14} color={colors.light.ink} />
+                  <Meta style={{ marginLeft: 8, color: colors.light.ink }}>PLOT A NEW ROUTE</Meta>
+                </TouchableOpacity>
+              )}
+              {tab === 'active' && (
+                <TouchableOpacity
+                  testID="trips-empty-cta-active"
+                  onPress={() => setTab('planned')}
+                  style={styles.emptyCta}
+                  activeOpacity={0.85}
+                >
+                  <Feather name="arrow-right" size={14} color={colors.light.ink} />
+                  <Meta style={{ marginLeft: 8, color: colors.light.ink }}>SEE UPCOMING</Meta>
+                </TouchableOpacity>
+              )}
+            </View>
+          }
+        />
+      )}
     </SafeAreaView>
   );
 }
