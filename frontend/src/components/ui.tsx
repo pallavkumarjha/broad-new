@@ -8,8 +8,8 @@ export function Eyebrow({ children, color, style, testID }: { children: React.Re
 }
 
 // ---------- Meta (mono small) ----------
-export function Meta({ children, color, style, testID }: { children: React.ReactNode; color?: string; style?: TextStyle; testID?: string }) {
-  return <Text testID={testID} style={[type.meta, { color: color || colors.light.inkMuted }, style]}>{children}</Text>;
+export function Meta({ children, color, style, testID, numberOfLines }: { children: React.ReactNode; color?: string; style?: TextStyle; testID?: string; numberOfLines?: number }) {
+  return <Text testID={testID} numberOfLines={numberOfLines} style={[type.meta, { color: color || colors.light.inkMuted }, style]}>{children}</Text>;
 }
 
 // ---------- Rule (1px horizontal divider) ----------

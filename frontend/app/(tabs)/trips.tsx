@@ -138,7 +138,6 @@ export default function Trips() {
         <FlashList
           data={filtered}
           keyExtractor={(t) => t.id}
-          estimatedItemSize={120}
           contentContainerStyle={{ paddingBottom: space.xxl }}
           refreshControl={<RefreshControl refreshing={tripsQuery.isRefetching && !isInitialLoading} onRefresh={onRefresh} />}
           renderItem={({ item }) => (
