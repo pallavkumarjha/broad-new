@@ -229,7 +229,6 @@ export default function Discover() {
         <FlashList
           data={rides}
           keyExtractor={(r) => r.id}
-          estimatedItemSize={380}
           contentContainerStyle={{ paddingBottom: space.xxl }}
           refreshControl={<RefreshControl refreshing={ridesQuery.isRefetching && !isInitialLoading} onRefresh={onRefresh} />}
           renderItem={({ item, index }) => (
