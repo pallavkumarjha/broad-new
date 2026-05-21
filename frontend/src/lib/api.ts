@@ -96,8 +96,8 @@ api.interceptors.response.use(
       original._retry = true;
       const newAccess = await _refreshAccessToken();
       if (newAccess) {
-        original.headers = original.headers || {};
-        original.headers.Authorization = `Bearer ${newAccess}`;
+        // No need to set the header here — api(original) re-runs the request
+        // interceptor, which reads the freshly-stored token.
         return api(original);
       }
     }

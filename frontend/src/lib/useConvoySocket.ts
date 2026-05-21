@@ -124,6 +124,9 @@ export function useConvoySocket(
     async function connect() {
       if (cancelled) return;
       const token = await storage.getItem(TOKEN_KEY);
+      // Unmount can land during the await above — bail before opening a
+      // socket that nothing would ever close.
+      if (cancelled) return;
       const wsBase = resolveWsBase();
       if (!token || !wsBase) {
         // No transport configured — caller is in REST-only mode. Surface a

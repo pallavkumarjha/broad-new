@@ -11,6 +11,7 @@ import time
 import logging
 import uuid
 from collections import defaultdict
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Literal
 
@@ -42,6 +43,20 @@ logger = logging.getLogger("broad")
 # load balancer. See docs/ops/rate-limiting.md (TODO) for the migration.
 _rl_store: dict = defaultdict(list)
 
+# Buckets idle longer than the largest rate-limit window (3600s, used by
+# register/sos/join) are dead weight — a fresh check would trim them to empty
+# regardless. An hourly sweep drops them so _rl_store doesn't grow one
+# permanent entry per unique IP/email ever seen.
+_RL_MAX_WINDOW = 3600
+_rl_last_sweep = time.monotonic()
+
+
+def _rl_sweep(now: float) -> None:
+    stale = [b for b, hits in _rl_store.items() if not hits or now - hits[-1] >= _RL_MAX_WINDOW]
+    for b in stale:
+        del _rl_store[b]
+
+
 def _rate_limit(key: str, max_hits: int = 10, window: int = 60, scope: str = "default") -> None:
     """Raise HTTP 429 if `key` has exceeded `max_hits` calls within `window` seconds in `scope`.
     No-ops entirely when RATE_LIMIT_DISABLED=1 — used by the test suite."""
@@ -49,6 +64,10 @@ def _rate_limit(key: str, max_hits: int = 10, window: int = 60, scope: str = "de
         return
     bucket = f"{scope}:{key}"
     now = time.monotonic()
+    global _rl_last_sweep
+    if now - _rl_last_sweep > _RL_MAX_WINDOW:
+        _rl_sweep(now)
+        _rl_last_sweep = now
     hits = _rl_store[bucket]
     _rl_store[bucket] = [t for t in hits if now - t < window]
     if len(_rl_store[bucket]) >= max_hits:
@@ -71,7 +90,15 @@ db = client[os.environ["DB_NAME"]]
 
 
 # ---------- App ----------
-app = FastAPI(title="Broad — The Rider's Companion API")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await seed()
+    asyncio.ensure_future(process_push_receipts())
+    yield
+    client.close()
+
+
+app = FastAPI(title="Broad — The Rider's Companion API", lifespan=lifespan)
 api = APIRouter(prefix="/api")
 
 JWT_ALGO = "HS256"
@@ -368,7 +395,9 @@ class SOSContact(BaseModel):
 
 class SOSDetail(SOSEvent):
     sender_name: str
-    sender_email: EmailStr
+    # Plain str (not EmailStr): output-only field for the responder UI; EmailStr
+    # would 500 on a sender doc with a missing/empty email for no real benefit.
+    sender_email: str
     emergency_contact: Optional[SOSContact] = None
 
 
@@ -435,12 +464,17 @@ async def register(body: RegisterIn, request: Request):
         "email": email,
         "password_hash": hash_password(body.password),
         "name": body.name.strip() or "Rider",
-        "bike": Bike().dict(),
+        "bike": Bike().model_dump(),
         "emergency_contacts": [],
-        "stats": UserStats().dict(),
+        "stats": UserStats().model_dump(),
         "created_at": now_iso(),
     }
-    await db.users.insert_one(doc)
+    try:
+        await db.users.insert_one(doc)
+    except DuplicateKeyError:
+        # Lost a race against a concurrent signup with the same email — the
+        # find_one check above is TOCTOU; the unique index is the real guard.
+        raise HTTPException(status_code=400, detail="Email already registered")
     token = create_access_token(uid, email)
     refresh = await _issue_refresh(uid, request)
     doc.pop("password_hash", None)
@@ -523,9 +557,9 @@ async def update_me(body: UpdateUserIn, user: dict = Depends(get_current_user)):
     if "name" in sent and body.name is not None:
         update["name"] = body.name.strip()
     if "bike" in sent and body.bike is not None:
-        update["bike"] = body.bike.dict()
+        update["bike"] = body.bike.model_dump()
     if "emergency_contacts" in sent and body.emergency_contacts is not None:
-        update["emergency_contacts"] = [c.dict() for c in body.emergency_contacts]
+        update["emergency_contacts"] = [c.model_dump() for c in body.emergency_contacts]
     if "home_city" in sent:
         update["home_city"] = body.home_city.strip() if body.home_city else None
     if "rider_type" in sent:
@@ -578,7 +612,7 @@ async def create_trip(body: TripCreate, user: dict = Depends(get_current_user)):
         "top_speed_kmh": 0,
         "duration_min": 0,
         "created_at": now_iso(),
-        **body.dict(),
+        **body.model_dump(),
     }
     await db.trips.insert_one(doc)
     if doc.get("is_public"):
@@ -698,7 +732,7 @@ async def post_trip_pos(trip_id: str, body: BackgroundPosIn, user: dict = Depend
             "lat": None, "lng": None, "speed_kmh": 0, "heading_deg": 0, "accuracy_m": None,
             "updated_at": now_iso(), "sockets": {},
         }
-    applied = await hub.update(trip_id, user["id"], body.dict())
+    applied = await hub.update(trip_id, user["id"], body.model_dump())
     return {"ok": applied}
 
 
@@ -791,7 +825,7 @@ async def update_trip(trip_id: str, body: TripUpdate, user: dict = Depends(get_c
         raise HTTPException(status_code=404, detail="Trip not found")
     if doc["user_id"] != user["id"]:
         raise HTTPException(status_code=403, detail="Forbidden")
-    update = {k: v for k, v in body.dict(exclude_none=True).items()}
+    update = {k: v for k, v in body.model_dump(exclude_none=True).items()}
     # Metadata edits (name, planned_date, planned_end_date, notes, description, max_riders) are only
     # valid on planned trips. Reject the whole PATCH with 400 if the caller is
     # trying to edit metadata on an active/completed trip — silently dropping
@@ -837,7 +871,10 @@ async def update_trip(trip_id: str, body: TripUpdate, user: dict = Depends(get_c
                 body=f"{user.get('name', 'The organiser')} started {doc.get('name', 'your ride')}.",
                 data={"type": "trip_started", "trip_id": trip_id},
             ))
-    if body.status == "completed":
+    # Guard against re-completion: a repeat PATCH status=completed (timeout retry,
+    # double-tap) must not run the stats $inc twice. Mirrors the started_at guard
+    # on the active branch above.
+    if body.status == "completed" and doc.get("status") != "completed":
         update["ended_at"] = now_iso()
         # Credit every rider who was on the trip — organiser + all confirmed crew —
         # not just the organiser who tapped Complete. They rode the same kilometres.
@@ -850,7 +887,7 @@ async def update_trip(trip_id: str, body: TripUpdate, user: dict = Depends(get_c
     await db.trips.update_one({"id": trip_id}, {"$set": update})
     # Invalidate discover cache on any mutation to a public trip (or on
     # status changes that affect visibility).
-    if doc.get("is_public") or update.get("status") or update.get("is_public") is not None:
+    if doc.get("is_public") or update.get("status"):
         _invalidate_discover_cache()
     # If the trip just transitioned to completed/cancelled, evict everyone from the
     # convoy WS room. Otherwise their clients keep broadcasting position to a
@@ -965,7 +1002,9 @@ async def process_push_receipts() -> None:
             # 3. Request receipts from Expo (SDK handles chunking internally if we use it,
             # but we'll manually chunk to 100 to stay within MongoDB/FastAPI memory limits).
             try:
-                receipts = client.get_push_notification_receipts(ticket_ids)
+                # SDK is synchronous (requests-based) — run off the event loop
+                # so receipt polling doesn't block all other requests.
+                receipts = await asyncio.to_thread(client.get_push_notification_receipts, ticket_ids)
             except Exception as exc:
                 logger.warning("Failed to fetch push receipts: %s", exc)
                 await asyncio.sleep(300)
@@ -1035,8 +1074,9 @@ async def _send_expo_push(tokens: List[str], title: str, body: str, data: dict |
     client = PushClient()
     try:
         # The SDK's publish method automatically chunks the messages (default 100)
-        # and returns a list of PushTicket objects.
-        responses = client.publish_multiple(messages)
+        # and returns a list of PushTicket objects. It's synchronous (requests-based),
+        # so run it off the event loop — otherwise every push send blocks the worker.
+        responses = await asyncio.to_thread(client.publish_multiple, messages)
 
         # Save tickets to MongoDB so the background receipt-processor can verify
         # delivery and prune dead tokens later.
@@ -1326,6 +1366,12 @@ async def delete_account(user: dict = Depends(get_current_user)):
     await db.refresh_tokens.delete_many({"user_id": uid})
     await db.notifications.delete_many({"user_id": uid})
     await db.trip_requests.delete_many({"requested_by": uid})
+    # Pull the user from every trip they joined as crew — otherwise a deleted
+    # account permanently occupies a slot against that trip's max_riders.
+    await db.trips.update_many(
+        {"crew_ids": uid},
+        {"$pull": {"crew_ids": uid, "crew": user.get("name", "")}},
+    )
     await db.users.delete_one({"id": uid})
     return {"ok": True}
 
@@ -1362,7 +1408,7 @@ async def trigger_sos(body: SOSCreate, request: Request, user: dict = Depends(ge
     # user could fan SOS into any trip room they're not on (privacy + abuse).
     # We strip an unauthorised trip_id rather than 400 — the SOS itself is
     # legit, we just won't broadcast to a room the user isn't in.
-    payload = body.dict()
+    payload = body.model_dump()
     if payload.get("trip_id"):
         trip = await db.trips.find_one(
             {"id": payload["trip_id"]}, {"_id": 0, "user_id": 1, "crew_ids": 1}
@@ -1523,7 +1569,7 @@ async def users_search(q: str, user: dict = Depends(get_current_user)):
 async def my_achievements(user: dict = Depends(get_current_user)):
     """Derive badges from completed trips + stats."""
     cursor = db.trips.find(
-        {"$or": [{"user_id": user["id"]}, {"crew_members": user["id"]}], "status": "completed"},
+        {"$or": [{"user_id": user["id"]}, {"crew_ids": user["id"]}], "status": "completed"},
         {"_id": 0},
     )
     trips = await cursor.to_list(500)
@@ -2097,14 +2143,3 @@ async def seed():
         })
 
     logger.info("Seed complete. Admin: %s", admin_email)
-
-
-@app.on_event("startup")
-async def on_start():
-    await seed()
-    asyncio.ensure_future(process_push_receipts())
-
-
-@app.on_event("shutdown")
-async def on_stop():
-    client.close()

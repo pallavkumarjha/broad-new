@@ -30,6 +30,10 @@ type AuthState = {
 
 const Ctx = createContext<AuthState | null>(null);
 
+/** Local cache of this device's Expo push token, written at registration so
+ * signOut can unregister it without a second (slow, network-bound) fetch. */
+const PUSH_TOKEN_KEY = 'broad_push_token';
+
 /** Register this device's Expo push token with the backend (best-effort, never throws). */
 async function _registerPushToken(): Promise<void> {
   if (Platform.OS === 'web') return;
@@ -49,6 +53,8 @@ async function _registerPushToken(): Promise<void> {
                      Constants.expoConfig?.owner; 
     
     const tokenData = await Notifications.getExpoPushTokenAsync({ projectId });
+    // Cache locally so signOut can unregister without re-fetching from Expo.
+    await storage.setItem(PUSH_TOKEN_KEY, tokenData.data);
     // Backend uses $addToSet — safe to call on every app launch.
     await api.post('/users/me/push-token', { token: tokenData.data });
   } catch (err) {
@@ -108,16 +114,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const refreshToken = await storage.getItem(REFRESH_TOKEN_KEY);
       if (refreshToken) await api.post('/auth/logout', { refresh_token: refreshToken });
       
-      // Also unregister this device's push token so we stop sending pushes to it
+      // Unregister this device's push token using the value cached at
+      // registration — avoids a slow getExpoPushTokenAsync network round-trip
+      // that could stall sign-out.
       if (Platform.OS !== 'web') {
-        const Notifications = await import('expo-notifications');
-        const projectId = Constants.expoConfig?.extra?.eas?.projectId || Constants.expoConfig?.owner;
-        const tokenData = await Notifications.getExpoPushTokenAsync({ projectId });
-        await api.delete('/users/me/push-token', { data: { token: tokenData.data } });
+        const pushToken = await storage.getItem(PUSH_TOKEN_KEY);
+        if (pushToken) await api.delete('/users/me/push-token', { data: { token: pushToken } });
       }
     } catch {}
     await storage.deleteItem(TOKEN_KEY);
     await storage.deleteItem(REFRESH_TOKEN_KEY);
+    await storage.deleteItem(PUSH_TOKEN_KEY);
     // Drop in-memory + persisted React Query cache so the next signed-in
     // user doesn't see the previous user's trips flash on screen during
     // the cold-start hydration window.
