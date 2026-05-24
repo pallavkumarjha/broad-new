@@ -29,7 +29,7 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo.errors import DuplicateKeyError
-from pydantic import BaseModel, Field, EmailStr, model_validator
+from pydantic import BaseModel, Field, EmailStr, field_validator, model_validator
 
 
 # ---------- Logging (must be before first use) ----------
@@ -245,7 +245,7 @@ class Waypoint(BaseModel):
 
 
 class TripCreate(BaseModel):
-    name: str
+    name: str = Field(..., min_length=1, max_length=120)
     start: Waypoint
     end: Waypoint
     waypoints: List[Waypoint] = Field(default_factory=list)
@@ -261,6 +261,14 @@ class TripCreate(BaseModel):
     max_riders: int = 8                # cap including organiser; 2..50
     description: str = ""              # optional public-facing pitch
     city: str = ""                     # short region tag, e.g. "Bangalore" — used by Discover filter
+
+    @field_validator("name")
+    @classmethod
+    def _name_required(cls, value: str) -> str:
+        name = value.strip()
+        if not name:
+            raise ValueError("Ride name is required")
+        return name
 
     @model_validator(mode="after")
     def _check_date_range(self):
@@ -339,6 +347,16 @@ class TripUpdate(BaseModel):
     # minimum (organiser); we additionally enforce >= current crew_ids+1
     # at the endpoint level since that bound depends on the trip doc.
     max_riders: Optional[int] = Field(None, ge=1, le=50)
+
+    @field_validator("name")
+    @classmethod
+    def _name_required(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        name = value.strip()
+        if not name:
+            raise ValueError("Ride name is required")
+        return name
 
     @model_validator(mode="after")
     def _check_date_range(self):

@@ -101,3 +101,6 @@ credentials.json
 *.pem
 *.key
 .credentials
+
+graphify-out
+*.apk

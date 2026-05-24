@@ -1,5 +1,5 @@
-import React, { useState, memo, useCallback } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, RefreshControl, useWindowDimensions } from 'react-native';
+import React, { useState, memo, useCallback, useMemo } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, RefreshControl, useWindowDimensions, PanResponder } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -12,7 +12,9 @@ import { EmptyRoadIllus } from '../../src/components/illustrations';
 import { SkeletonTripRow } from '../../src/components/Skeleton';
 import { formatTripRange } from '../../src/lib/dates';
 
-const TABS: { key: string; label: string }[] = [
+type TripTab = 'active' | 'planned' | 'completed';
+
+const TABS: { key: TripTab; label: string }[] = [
   { key: 'active', label: 'ACTIVE' },
   { key: 'planned', label: 'UPCOMING' },
   { key: 'completed', label: 'LOGGED' },
@@ -53,7 +55,7 @@ const TripRow = memo(function TripRow({ trip: t, hasPending, onPress }: TripRowP
 export default function Trips() {
   const router = useRouter();
   const { width } = useWindowDimensions();
-  const [tab, setTab] = useState<'active' | 'planned' | 'completed'>('planned');
+  const [tab, setTab] = useState<TripTab>('planned');
 
   // Shared cache key with Home — one fetch powers both screens.
   const tripsQuery = useQuery<any[]>({
@@ -83,6 +85,19 @@ export default function Trips() {
     router.push(t.status === 'active' ? `/ride/${t.id}` : `/trip/${t.id}`);
   }, [router, qc]);
   const filtered = trips.filter(t => t.status === tab);
+  const tabIndex = TABS.findIndex(t => t.key === tab);
+  const swipeResponder = useMemo(() => PanResponder.create({
+    onMoveShouldSetPanResponder: (_, gesture) => (
+      Math.abs(gesture.dx) > 32 && Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.4
+    ),
+    onPanResponderRelease: (_, gesture) => {
+      if (Math.abs(gesture.dx) < 60) return;
+      const nextIndex = gesture.dx < 0
+        ? Math.min(TABS.length - 1, tabIndex + 1)
+        : Math.max(0, tabIndex - 1);
+      if (nextIndex !== tabIndex) setTab(TABS[nextIndex].key);
+    },
+  }), [tabIndex]);
   // Map trip_id -> bool for quick lookup in the row
   const pendingByTrip = React.useMemo(() => {
     const m: Record<string, boolean> = {};
@@ -120,7 +135,7 @@ export default function Trips() {
 
       <View style={styles.tabs}>
         {TABS.map(t => (
-          <TouchableOpacity key={t.key} testID={`trips-tab-${t.key}`} onPress={() => setTab(t.key as any)} style={styles.tabBtn}>
+          <TouchableOpacity key={t.key} testID={`trips-tab-${t.key}`} onPress={() => setTab(t.key)} style={styles.tabBtn}>
             <Text style={[type.eyebrow, { color: tab === t.key ? colors.light.ink : colors.light.inkMuted }]}>{t.label}</Text>
             <View style={[styles.tabUnderline, { backgroundColor: tab === t.key ? colors.light.ink : 'transparent' }]} />
           </TouchableOpacity>
@@ -128,55 +143,57 @@ export default function Trips() {
       </View>
       <Rule />
 
-      {isInitialLoading ? (
-        <View>
-          <SkeletonTripRow testID="trips-skel-1" />
-          <SkeletonTripRow testID="trips-skel-2" />
-          <SkeletonTripRow testID="trips-skel-3" />
-        </View>
-      ) : (
-        <FlashList
-          data={filtered}
-          keyExtractor={(t) => t.id}
-          contentContainerStyle={{ paddingBottom: space.xxl }}
-          refreshControl={<RefreshControl refreshing={tripsQuery.isRefetching && !isInitialLoading} onRefresh={onRefresh} />}
-          renderItem={({ item }) => (
-            <TripRow trip={item} hasPending={!!pendingByTrip[item.id]} onPress={rowPress} />
-          )}
-          ListEmptyComponent={
-            <View style={styles.empty}>
-              <EmptyRoadIllus width={width - space.lg * 2} height={150} />
-              <Text style={[type.body, { color: colors.light.inkMuted, textAlign: 'center', marginTop: space.lg }]}>
-                {tab === 'active' && 'No trip in progress.'}
-                {tab === 'planned' && 'No upcoming trips.\nThe road is waiting.'}
-                {tab === 'completed' && 'No trips logged yet.\nThe road is patient.'}
-              </Text>
-              {tab !== 'active' && (
-                <TouchableOpacity
-                  testID={`trips-empty-cta-${tab}`}
-                  onPress={() => router.push('/plan')}
-                  style={styles.emptyCta}
-                  activeOpacity={0.85}
-                >
-                  <Feather name="plus" size={14} color={colors.light.ink} />
-                  <Meta style={{ marginLeft: 8, color: colors.light.ink }}>PLOT A NEW ROUTE</Meta>
-                </TouchableOpacity>
-              )}
-              {tab === 'active' && (
-                <TouchableOpacity
-                  testID="trips-empty-cta-active"
-                  onPress={() => setTab('planned')}
-                  style={styles.emptyCta}
-                  activeOpacity={0.85}
-                >
-                  <Feather name="arrow-right" size={14} color={colors.light.ink} />
-                  <Meta style={{ marginLeft: 8, color: colors.light.ink }}>SEE UPCOMING</Meta>
-                </TouchableOpacity>
-              )}
-            </View>
-          }
-        />
-      )}
+      <View style={styles.swipeArea} {...swipeResponder.panHandlers}>
+        {isInitialLoading ? (
+          <View>
+            <SkeletonTripRow testID="trips-skel-1" />
+            <SkeletonTripRow testID="trips-skel-2" />
+            <SkeletonTripRow testID="trips-skel-3" />
+          </View>
+        ) : (
+          <FlashList
+            data={filtered}
+            keyExtractor={(t) => t.id}
+            contentContainerStyle={{ paddingBottom: space.xxl }}
+            refreshControl={<RefreshControl refreshing={tripsQuery.isRefetching && !isInitialLoading} onRefresh={onRefresh} />}
+            renderItem={({ item }) => (
+              <TripRow trip={item} hasPending={!!pendingByTrip[item.id]} onPress={rowPress} />
+            )}
+            ListEmptyComponent={
+              <View style={styles.empty}>
+                <EmptyRoadIllus width={width - space.lg * 2} height={150} />
+                <Text style={[type.body, { color: colors.light.inkMuted, textAlign: 'center', marginTop: space.lg }]}>
+                  {tab === 'active' && 'No trip in progress.'}
+                  {tab === 'planned' && 'No upcoming trips.\nThe road is waiting.'}
+                  {tab === 'completed' && 'No trips logged yet.\nThe road is patient.'}
+                </Text>
+                {tab !== 'active' && (
+                  <TouchableOpacity
+                    testID={`trips-empty-cta-${tab}`}
+                    onPress={() => router.push('/plan')}
+                    style={styles.emptyCta}
+                    activeOpacity={0.85}
+                  >
+                    <Feather name="plus" size={14} color={colors.light.ink} />
+                    <Meta style={{ marginLeft: 8, color: colors.light.ink }}>PLOT A NEW ROUTE</Meta>
+                  </TouchableOpacity>
+                )}
+                {tab === 'active' && (
+                  <TouchableOpacity
+                    testID="trips-empty-cta-active"
+                    onPress={() => setTab('planned')}
+                    style={styles.emptyCta}
+                    activeOpacity={0.85}
+                  >
+                    <Feather name="arrow-right" size={14} color={colors.light.ink} />
+                    <Meta style={{ marginLeft: 8, color: colors.light.ink }}>SEE UPCOMING</Meta>
+                  </TouchableOpacity>
+                )}
+              </View>
+            }
+          />
+        )}
+      </View>
     </SafeAreaView>
   );
 }
@@ -189,6 +206,7 @@ const styles = StyleSheet.create({
   tabs: { flexDirection: 'row', paddingHorizontal: space.lg, gap: 24, paddingBottom: space.sm },
   tabBtn: { paddingVertical: space.sm },
   tabUnderline: { height: 2, marginTop: 6 },
+  swipeArea: { flex: 1 },
   row: {
     flexDirection: 'row', alignItems: 'center',
     paddingHorizontal: space.lg, paddingVertical: space.lg,

@@ -213,10 +213,15 @@ export default function Plan() {
   }, [crewQuery, crewPickerOpen]);
 
   const submit = async () => {
+    const rideName = name.trim();
+    if (!rideName) {
+      setErr('Ride name is required');
+      return;
+    }
     setErr(''); setBusy(true);
     try {
       const { data } = await api.post('/trips', {
-        name, start, end, waypoints,
+        name: rideName, start, end, waypoints,
         distance_km: distance,
         elevation_m: elevMax ?? Math.round(distance * 3.5),
         planned_date: toIsoDate(plannedDate),
@@ -266,7 +271,7 @@ export default function Plan() {
           <Rule />
 
           <View style={styles.section}>
-            <Eyebrow>NAME YOUR RIDE</Eyebrow>
+            <Eyebrow>NAME YOUR RIDE — REQUIRED</Eyebrow>
             <TextInput testID="plan-name-input" value={name} onChangeText={setName} onFocus={() => setFocused('name')} onBlur={() => setFocused(null)} style={[styles.input, focused === 'name' && styles.inputFocused]} placeholder="E.g., Sunday Breakfast Run" placeholderTextColor={colors.light.inkMuted} />
           </View>
 
@@ -448,7 +453,7 @@ export default function Plan() {
             {err ? (
               <ErrorStrip testID="plan-error" title="COULD NOT SAVE" message={err} style={{ marginBottom: space.md }} />
             ) : null}
-            <Button label="CREATE RIDE" onPress={submit} loading={busy} testID="plan-save-button" />
+            <Button label="CREATE RIDE" onPress={submit} loading={busy} disabled={busy || !name.trim()} testID="plan-save-button" />
           </View>
         </ScrollView>
       </KeyboardAvoidingView>

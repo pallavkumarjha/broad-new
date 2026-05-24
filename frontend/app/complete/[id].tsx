@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, ScrollView, ActivityIndicator } from 'react-nat
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { api } from '../../src/lib/api';
+import { queryClient } from '../../src/lib/queryClient';
 import { colors, type, space } from '../../src/theme/tokens';
 import { Eyebrow, Rule, SpecRow, Button, Card } from '../../src/components/ui';
 import { MapView } from '../../src/components/MapView';
@@ -12,7 +13,7 @@ export default function Complete() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const [trip, setTrip] = useState<any>(null);
+  const [trip, setTrip] = useState<any>(() => queryClient.getQueryData(['trips', 'detail', id]));
 
   useEffect(() => {
     (async () => {

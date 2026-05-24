@@ -99,6 +99,7 @@ export default function LiveRide() {
   // the map. Avatar stack and rider count stay visible; tap reveals the
   // full list with per-rider speed + pan-to-marker affordance.
   const [crewExpanded, setCrewExpanded] = useState(false);
+  const [endBusy, setEndBusy] = useState(false);
   // The elapsed-time interval below already drives a 1Hz re-render of the
   // entire screen, which is enough for stale-marker computation to pick up
   // missing WS ticks (STALE_AFTER_MS = 30_000 so 1s precision is overkill
@@ -587,13 +588,12 @@ export default function LiveRide() {
   const isLastLeg = totalLegs <= 1 || currentLegIndex >= totalLegs - 1;
 
   const openInGoogleMaps = () => {
-    if (!legFrom || !legTo) return;
+    if (!legTo) return;
     // Universal deep-link format. Works for Maps app on iOS/Android and falls
-    // back to the web client when the app isn't installed. travelmode=driving
-    // matches the rider use case; OSRM also drives the on-screen polyline.
+    // back to the web client when the app isn't installed. Omitting `origin`
+    // lets Google Maps use the rider's current device location.
     const url =
       `https://www.google.com/maps/dir/?api=1` +
-      `&origin=${legFrom.lat},${legFrom.lng}` +
       `&destination=${legTo.lat},${legTo.lng}` +
       `&travelmode=driving`;
     Linking.openURL(url).catch(() => {
@@ -673,6 +673,7 @@ export default function LiveRide() {
   const isOrganiser = !!currentUser?.id && trip?.user_id === currentUser.id;
 
   const endTrip = async () => {
+    if (endBusy) return;
     if (!isOrganiser) {
       // Defensive: this path shouldn't be reachable since the END button is
       // gated to organisers, but if a future caller bypasses that we surface
@@ -680,19 +681,24 @@ export default function LiveRide() {
       Alert.alert("Not allowed", "Only the organiser can end this ride. Use LEAVE to drop out.");
       return;
     }
+    setEndBusy(true);
     try {
-      await api.patch(`/trips/${id}`, {
+      const { data } = await api.patch(`/trips/${id}`, {
         status: 'completed',
         actual_distance_km: parseFloat(distanceCovered),
         top_speed_kmh: topSpeed,
         duration_min: Math.round(elapsed / 60),
       });
+      qc.setQueryData(['trips', 'detail', id], data);
+      qc.invalidateQueries({ queryKey: ['trips', 'mine'] });
       // Stop background broadcast immediately — without this, the foreground
       // service keeps firing for one more cycle until the server returns
-      // `trip_not_active`, which is a small but visible battery hit.
-      await stopBackgroundTracking().catch(() => {});
+      // `trip_not_active`. Do it after navigation so the summary appears
+      // as soon as the server has accepted the completion.
       router.replace(`/complete/${id}`);
+      stopBackgroundTracking().catch(() => {});
     } catch (e: any) {
+      setEndBusy(false);
       // Don't navigate away on failure — riders should be able to retry rather
       // than seeing the trip stuck on "active" because the patch silently 503'd.
       Alert.alert(
@@ -1023,11 +1029,12 @@ export default function LiveRide() {
             <TouchableOpacity
               onPress={isLastLeg ? endTrip : advanceLeg}
               testID={isLastLeg ? 'ride-end-btn' : 'ride-next-leg-btn'}
-              style={styles.primaryBtn}
+              style={[styles.primaryBtn, endBusy && { opacity: 0.65 }]}
+              disabled={endBusy}
               activeOpacity={0.85}
             >
               <Meta style={styles.primaryBtnText}>
-                {isLastLeg ? 'END RIDE' : 'ARRIVED · NEXT LEG'}
+                {isLastLeg ? (endBusy ? 'ENDING RIDE' : 'END RIDE') : 'ARRIVED · NEXT LEG'}
               </Meta>
               <Feather
                 name={isLastLeg ? 'check-circle' : 'arrow-right'}

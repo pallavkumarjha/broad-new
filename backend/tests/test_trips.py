@@ -102,6 +102,25 @@ class TestTrips:
         assert get_response.status_code == 200
         assert get_response.json()["name"] == new_trip["name"]
 
+    def test_create_trip_requires_name(self, base_url, api_client, auth_headers):
+        """Test POST /trips rejects blank ride names"""
+        new_trip = {
+            "name": "   ",
+            "start": {"name": "Mumbai", "lat": 19.0760, "lng": 72.8777},
+            "end": {"name": "Goa", "lat": 15.2993, "lng": 74.1240},
+            "distance_km": 580,
+            "elevation_m": 650,
+            "crew": [],
+            "is_public": False
+        }
+
+        response = api_client.post(
+            f"{base_url}/api/trips",
+            json=new_trip,
+            headers=auth_headers
+        )
+        assert response.status_code == 422
+
     def test_start_trip_updates_status(self, base_url, api_client, auth_headers):
         """Test PATCH /trips/{id} with status=active sets started_at"""
         # First create a trip
